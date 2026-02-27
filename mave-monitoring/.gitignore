@@ -1,0 +1,56 @@
+# ============================================
+# MAVE Monitoring - .gitignore
+# ============================================
+
+# ---------- Node.js ----------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.npm
+.yarn-integrity
+
+# ---------- Build outputs ----------
+dist/
+build/
+*.js.map
+
+# ---------- Environment / Secrets ----------
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ---------- IDEs ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# ---------- OS ----------
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ---------- Docker ----------
+postgres_data/
+
+# ---------- Logs ----------
+*.log
+logs/
+
+# ---------- Misc ----------
+*.bak
+*.tmp
+*.temp
+.cache/
