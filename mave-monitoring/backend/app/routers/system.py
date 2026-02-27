@@ -1,11 +1,12 @@
 import time
 import os
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from pydantic import BaseModel
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.auth import get_current_user, hash_password
-from app.models import User, AlertConfig
+from app.models import User, AlertConfig, Conversation, Message, ConversationAnalysis, Alert
 from app.jobs.task_manager import get_task
 
 router = APIRouter(tags=["system"])
@@ -71,3 +72,62 @@ async def run_seed(db: AsyncSession = Depends(get_db)):
 
     await db.commit()
     return {"results": results}
+
+
+class MergeRequest(BaseModel):
+    source_id: int
+    target_id: int
+
+
+@router.post("/system/merge-conversations")
+async def merge_conversations(body: MergeRequest, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    """Move all messages from source conversation into target, then delete source."""
+    source = (await db.execute(select(Conversation).where(Conversation.id == body.source_id))).scalar_one_or_none()
+    target = (await db.execute(select(Conversation).where(Conversation.id == body.target_id))).scalar_one_or_none()
+    if not source or not target:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Move messages
+    await db.execute(
+        update(Message).where(Message.conversation_id == source.id).values(conversation_id=target.id)
+    )
+
+    # Move alerts
+    await db.execute(
+        update(Alert).where(Alert.conversation_id == source.id).values(conversation_id=target.id)
+    )
+
+    # Delete source analysis if any
+    await db.execute(
+        select(ConversationAnalysis).where(ConversationAnalysis.conversation_id == source.id)
+    )
+    source_analysis = (await db.execute(
+        select(ConversationAnalysis).where(ConversationAnalysis.conversation_id == source.id)
+    )).scalar_one_or_none()
+    if source_analysis:
+        await db.delete(source_analysis)
+
+    # Update target message count and timestamps
+    from sqlalchemy import func
+    stats = (await db.execute(
+        select(
+            func.count(Message.id),
+            func.min(Message.timestamp),
+            func.max(Message.timestamp),
+        ).where(Message.conversation_id == target.id)
+    )).one()
+    target.message_count = stats[0] or 0
+    if stats[1]:
+        target.started_at = stats[1]
+    if stats[2]:
+        target.last_message_at = stats[2]
+
+    # Delete source conversation
+    await db.delete(source)
+    await db.commit()
+
+    return {
+        "status": "merged",
+        "target_id": target.id,
+        "message_count": target.message_count,
+    }
