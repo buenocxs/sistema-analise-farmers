@@ -177,6 +177,23 @@ async def analyze_conversation_endpoint(conversation_id: int, db: AsyncSession =
     return analysis
 
 
+@router.delete("/{conversation_id}")
+async def delete_conversation(conversation_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
+    conv = result.scalar_one_or_none()
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    # Delete related records first
+    await db.execute(select(Message).where(Message.conversation_id == conv.id))
+    from sqlalchemy import delete
+    await db.execute(delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == conv.id))
+    await db.execute(delete(Message).where(Message.conversation_id == conv.id))
+    await db.delete(conv)
+    await db.commit()
+    return {"status": "deleted", "id": conversation_id}
+
+
 @router.post("/sync/{seller_id}")
 async def sync_conversations(seller_id: int, days: int = Query(7), db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
     result = await db.execute(select(Seller).where(Seller.id == seller_id))
