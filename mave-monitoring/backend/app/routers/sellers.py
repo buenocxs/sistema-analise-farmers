@@ -74,7 +74,7 @@ async def _seller_to_dict(db: AsyncSession, seller: Seller) -> dict:
 
 @router.get("")
 async def list_sellers(
-    page: int = Query(0, ge=0),
+    page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     search: str | None = None,
     team: str | None = None,
@@ -101,7 +101,7 @@ async def list_sellers(
     total = (await db.execute(count_q)).scalar() or 0
 
     effective_limit = limit or page_size
-    offset = page * effective_limit
+    offset = (page - 1) * effective_limit
     q = q.offset(offset).limit(effective_limit)
 
     result = await db.execute(q)
