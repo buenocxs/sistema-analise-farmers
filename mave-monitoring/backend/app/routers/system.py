@@ -82,52 +82,57 @@ class MergeRequest(BaseModel):
 @router.post("/system/merge-conversations")
 async def merge_conversations(body: MergeRequest, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
     """Move all messages from source conversation into target, then delete source."""
+    from sqlalchemy import delete as sql_delete, func
+
     source = (await db.execute(select(Conversation).where(Conversation.id == body.source_id))).scalar_one_or_none()
     target = (await db.execute(select(Conversation).where(Conversation.id == body.target_id))).scalar_one_or_none()
     if not source or not target:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
-    # Move messages
-    await db.execute(
-        update(Message).where(Message.conversation_id == source.id).values(conversation_id=target.id)
-    )
+    try:
+        # Move messages from source to target
+        await db.execute(
+            update(Message).where(Message.conversation_id == body.source_id).values(conversation_id=body.target_id)
+        )
 
-    # Move alerts
-    await db.execute(
-        update(Alert).where(Alert.conversation_id == source.id).values(conversation_id=target.id)
-    )
+        # Move alerts from source to target
+        await db.execute(
+            update(Alert).where(Alert.conversation_id == body.source_id).values(conversation_id=body.target_id)
+        )
 
-    # Delete source analysis if any
-    await db.execute(
-        select(ConversationAnalysis).where(ConversationAnalysis.conversation_id == source.id)
-    )
-    source_analysis = (await db.execute(
-        select(ConversationAnalysis).where(ConversationAnalysis.conversation_id == source.id)
-    )).scalar_one_or_none()
-    if source_analysis:
-        await db.delete(source_analysis)
+        # Delete source analysis
+        await db.execute(
+            sql_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == body.source_id)
+        )
 
-    # Update target message count and timestamps
-    from sqlalchemy import func
-    stats = (await db.execute(
-        select(
-            func.count(Message.id),
-            func.min(Message.timestamp),
-            func.max(Message.timestamp),
-        ).where(Message.conversation_id == target.id)
-    )).one()
-    target.message_count = stats[0] or 0
-    if stats[1]:
-        target.started_at = stats[1]
-    if stats[2]:
-        target.last_message_at = stats[2]
+        # Delete source conversation (use raw SQL to avoid ORM relationship issues)
+        await db.execute(
+            sql_delete(Conversation).where(Conversation.id == body.source_id)
+        )
 
-    # Delete source conversation
-    await db.delete(source)
-    await db.commit()
+        # Update target message count and timestamps
+        stats = (await db.execute(
+            select(
+                func.count(Message.id),
+                func.min(Message.timestamp),
+                func.max(Message.timestamp),
+            ).where(Message.conversation_id == body.target_id)
+        )).one()
 
-    return {
-        "status": "merged",
-        "target_id": target.id,
-        "message_count": target.message_count,
-    }
+        await db.execute(
+            update(Conversation).where(Conversation.id == body.target_id).values(
+                message_count=stats[0] or 0,
+                started_at=stats[1],
+                last_message_at=stats[2],
+            )
+        )
+
+        await db.commit()
+        return {
+            "status": "merged",
+            "target_id": body.target_id,
+            "message_count": stats[0] or 0,
+        }
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
