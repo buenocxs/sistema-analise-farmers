@@ -14,21 +14,25 @@ Retorne APENAS um JSON válido (sem markdown, sem ```json) com esta estrutura ex
   "sentiment_score": 0.0 a 1.0,
   "quality_score": 0.0 a 10.0,
   "quality_breakdown": {
-    "cordialidade": 0.0 a 10.0,
-    "conhecimento_produto": 0.0 a 10.0,
-    "tecnica_vendas": 0.0 a 10.0,
-    "tempo_resposta": 0.0 a 10.0,
-    "resolucao_objecoes": 0.0 a 10.0,
-    "personalizacao": 0.0 a 10.0,
-    "fechamento": 0.0 a 10.0
+    "abordagem_inicial": 0.0 a 10.0,
+    "identificacao_necessidade": 0.0 a 10.0,
+    "apresentacao_produto": 0.0 a 10.0,
+    "tratamento_objecoes": 0.0 a 10.0,
+    "agilidade_resposta": 0.0 a 10.0,
+    "conducao_fechamento": 0.0 a 10.0,
+    "profissionalismo": 0.0 a 10.0
   },
   "stage": "prospecção" | "qualificação" | "negociação" | "fechamento" | "pós-venda",
   "tone": "profissional" | "informal" | "agressivo" | "passivo" | "empático",
   "summary": "Resumo breve da conversa em 2-3 frases",
   "keywords": ["palavra1", "palavra2"],
-  "objections": [{"tipo": "tipo da objeção", "descricao": "descrição"}],
-  "objections_handled": [{"tipo": "tipo", "descricao": "como foi tratada"}]
+  "objections": [{"text": "descrição da objeção do cliente", "handled": true ou false}]
 }
+
+Regras para objections:
+- "text": descreva a objeção de forma clara e curta
+- "handled": true se o vendedor tratou/respondeu a objeção, false se ignorou ou não resolveu
+- Se não houver objeções, retorne lista vazia []
 
 CONVERSA:
 """
