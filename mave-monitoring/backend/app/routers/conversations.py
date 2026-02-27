@@ -1,4 +1,6 @@
+from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
@@ -177,16 +179,20 @@ async def analyze_conversation_endpoint(conversation_id: int, db: AsyncSession =
     return analysis
 
 
+class ConversationPatch(BaseModel):
+    customer_name: Optional[str] = None
+    status: Optional[str] = None
+
+
 @router.patch("/{conversation_id}")
-async def update_conversation(conversation_id: int, body: dict, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+async def update_conversation(conversation_id: int, body: ConversationPatch, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
     result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     conv = result.scalar_one_or_none()
     if not conv:
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
-    if "customer_name" in body:
-        conv.customer_name = body["customer_name"]
-    if "status" in body:
-        conv.status = body["status"]
+    updates = body.model_dump(exclude_unset=True)
+    for key, value in updates.items():
+        setattr(conv, key, value)
     await db.commit()
     return {"status": "updated", "id": conversation_id}
 
