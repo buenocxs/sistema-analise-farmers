@@ -22,12 +22,29 @@ async def _process_webhook(seller_id: int, payload: dict):
                 logger.warning(f"Webhook: seller {seller_id} not found")
                 return
 
-            phone = payload.get("phone", "")
             is_group = payload.get("isGroup", False)
             if is_group:
                 return
 
+            from_me = payload.get("fromMe", False)
+
+            # Extract customer phone.
+            # "Ao receber": phone = customer's phone (correct)
+            # "Ao enviar":  phone = seller's own phone (wrong!) — use chatId instead
+            chat_id = payload.get("chatId", "")
+            if chat_id:
+                # chatId is like "5511999999999@c.us" — always the customer
+                phone = chat_id.split("@")[0]
+            else:
+                phone = payload.get("phone", "")
+
+            # Safety check: if phone matches seller's own phone, skip
             normalized = normalize_phone(phone)
+            seller_norm = normalize_phone(seller.phone or "")
+            if normalized == seller_norm:
+                logger.debug(f"Webhook: skipping message to/from seller's own number {normalized}")
+                return
+
             if not normalized:
                 return
 
@@ -72,7 +89,6 @@ async def _process_webhook(seller_id: int, payload: dict):
             else:
                 ts = datetime.now(timezone.utc)
 
-            from_me = payload.get("fromMe", False)
             content = ""
             text_data = payload.get("text")
             if isinstance(text_data, dict):
