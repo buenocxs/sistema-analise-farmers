@@ -10,6 +10,11 @@ yarn-error.log*
 .npm
 .yarn-integrity
 
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.pyo
+
 # ---------- Build outputs ----------
 dist/
 build/
