@@ -279,7 +279,108 @@ async def recalculate_metrics(seller_id: int, days: int = Query(30), db: AsyncSe
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Vendedor não encontrado")
     task_id = create_task()
-    # Recalculate is a lightweight operation - complete immediately
-    from app.jobs.task_manager import complete_task
-    complete_task(task_id, {"recalculated": True})
+    run_background(_recalculate_metrics(seller_id, task_id, days))
     return {"task_id": task_id}
+
+
+async def _recalculate_metrics(seller_id: int, task_id: str, days: int):
+    """Compute daily_metrics from messages for the given seller."""
+    from datetime import date, timedelta
+    from app.database import async_session as get_session
+    from app.jobs.task_manager import update_task, complete_task, fail_task
+
+    try:
+        async with get_session() as db:
+            end_date = date.today()
+            start_date = end_date - timedelta(days=days)
+
+            # Get all messages for this seller in the date range
+            msg_q = (
+                select(Message)
+                .join(Conversation)
+                .where(and_(
+                    Conversation.seller_id == seller_id,
+                    func.date(Message.timestamp) >= start_date,
+                    func.date(Message.timestamp) <= end_date,
+                ))
+                .order_by(Message.conversation_id, Message.timestamp)
+            )
+            msg_result = await db.execute(msg_q)
+            messages = msg_result.scalars().all()
+
+            # Group messages by date
+            from collections import defaultdict
+            daily = defaultdict(lambda: {
+                "conversations": set(),
+                "messages_sent": 0,
+                "response_times": [],
+            })
+
+            # Group messages by conversation for response time calc
+            conv_msgs = defaultdict(list)
+            for m in messages:
+                conv_msgs[m.conversation_id].append(m)
+                day = m.timestamp.date()
+                daily[day]["messages_sent"] += 1
+                daily[day]["conversations"].add(m.conversation_id)
+
+            # Calculate response times per conversation
+            for conv_id, msgs in conv_msgs.items():
+                for i in range(1, len(msgs)):
+                    prev = msgs[i - 1]
+                    curr = msgs[i]
+                    # Response time = seller reply after customer message
+                    if not prev.from_me and curr.from_me:
+                        diff = (curr.timestamp - prev.timestamp).total_seconds()
+                        if 0 < diff < 86400:  # ignore > 24h
+                            day = curr.timestamp.date()
+                            daily[day]["response_times"].append(diff)
+
+            # Get quality scores for conversations
+            conv_ids = list(set(m.conversation_id for m in messages))
+            quality_map = {}
+            if conv_ids:
+                from app.models import ConversationAnalysis
+                qa_result = await db.execute(
+                    select(ConversationAnalysis.conversation_id, ConversationAnalysis.quality_score)
+                    .where(ConversationAnalysis.conversation_id.in_(conv_ids))
+                )
+                for cid, score in qa_result.all():
+                    if score is not None:
+                        quality_map[cid] = score
+
+            # Upsert daily_metrics
+            days_processed = 0
+            for day, data in sorted(daily.items()):
+                existing = await db.execute(
+                    select(DailyMetric).where(and_(
+                        DailyMetric.seller_id == seller_id,
+                        DailyMetric.date == day,
+                    ))
+                )
+                metric = existing.scalar_one_or_none()
+                if not metric:
+                    metric = DailyMetric(seller_id=seller_id, date=day)
+                    db.add(metric)
+
+                metric.conversations_started = len(data["conversations"])
+                metric.messages_sent = data["messages_sent"]
+
+                # Avg quality for conversations active on this day
+                scores = [quality_map[cid] for cid in data["conversations"] if cid in quality_map]
+                metric.quality_avg = round(sum(scores) / len(scores), 1) if scores else None
+
+                rts = data["response_times"]
+                metric.avg_response_time_seconds = round(sum(rts) / len(rts), 1) if rts else None
+
+                metric.response_under_5min = sum(1 for r in rts if r < 300)
+                metric.response_5_30min = sum(1 for r in rts if 300 <= r < 1800)
+                metric.response_30_60min = sum(1 for r in rts if 1800 <= r < 3600)
+                metric.response_over_60min = sum(1 for r in rts if r >= 3600)
+
+                days_processed += 1
+
+            await db.commit()
+            complete_task(task_id, {"days_processed": days_processed, "messages_analyzed": len(messages)})
+    except Exception as e:
+        fail_task(task_id, str(e))
