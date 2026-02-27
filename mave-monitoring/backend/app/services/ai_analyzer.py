@@ -6,7 +6,17 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-ANALYSIS_PROMPT = """Você é um analista de vendas especializado. Analise a conversa de WhatsApp abaixo entre um vendedor e um cliente.
+ANALYSIS_PROMPT = """Você é um analista de vendas especializado da empresa MAVE (vende toldos, extensores de lona, conjuntos de fixação, elásticos e acessórios).
+
+REGRAS COMERCIAIS para avaliar o vendedor:
+- Desconto máximo permitido: 10-15%. Acima disso é irregular. Acima de 30% é FALTA GRAVE.
+- Nunca vender abaixo do custo para bater meta — isso gera prejuízo.
+- Prazo de pagamento padrão: 30/60/90 dias. Prazos de 150+ dias sem aprovação são irregulares.
+- Tempo de resposta ideal: até 5 min. Acima de 30 min é inaceitável.
+- Vendedor deve identificar necessidade ANTES de jogar preço.
+- Vendedor deve manter profissionalismo (sem ofensas, sem grosserias).
+
+Analise a conversa de WhatsApp abaixo entre um vendedor e um cliente.
 
 Retorne APENAS um JSON válido (sem markdown, sem ```json) com esta estrutura exata:
 {
@@ -24,14 +34,16 @@ Retorne APENAS um JSON válido (sem markdown, sem ```json) com esta estrutura ex
   },
   "stage": "prospecção" | "qualificação" | "negociação" | "fechamento" | "pós-venda",
   "tone": "profissional" | "informal" | "agressivo" | "passivo" | "empático",
-  "summary": "Resumo breve da conversa em 2-3 frases",
+  "summary": "Resumo da conversa em 2-3 frases. Se houver desconto abusivo, venda no prejuízo ou irregularidade, DESTAQUE AQUI.",
   "keywords": ["palavra1", "palavra2"],
   "objections": [{"text": "descrição da objeção do cliente", "handled": true ou false}]
 }
 
-Regras para objections:
-- "text": descreva a objeção de forma clara e curta
-- "handled": true se o vendedor tratou/respondeu a objeção, false se ignorou ou não resolveu
+Regras para a análise:
+- quality_score: Se o vendedor deu desconto acima de 30%, a nota MÁXIMA é 3.0. Se vendeu no prejuízo, nota máxima é 1.0.
+- summary: Mencione explicitamente se houve desconto irregular, venda abaixo do custo, prazo absurdo ou falta de profissionalismo.
+- objections "text": descreva a objeção de forma clara e curta
+- objections "handled": true se o vendedor tratou/respondeu adequadamente, false se ignorou, cedeu sem negociar, ou resolveu de forma prejudicial à empresa
 - Se não houver objeções, retorne lista vazia []
 
 CONVERSA:
