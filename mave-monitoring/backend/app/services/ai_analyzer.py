@@ -46,6 +46,12 @@ Regras para a análise:
 - objections "handled": true se o vendedor tratou/respondeu adequadamente, false se ignorou, cedeu sem negociar, ou resolveu de forma prejudicial à empresa
 - Se não houver objeções, retorne lista vazia []
 
+COERÊNCIA OBRIGATÓRIA:
+- As notas do quality_breakdown devem ser consistentes entre si e com o quality_score geral. Se agilidade_resposta tem nota alta, o summary NÃO pode reclamar de demora (e vice-versa).
+- Baseie cada nota em EVIDÊNCIA CONCRETA dos timestamps e conteúdo das mensagens. Não chute notas genéricas.
+- Se o tempo entre mensagens do vendedor for curto (< 5 min) → agilidade_resposta alta. Se for longo (> 30 min) → nota baixa. Analise os timestamps reais.
+- O summary deve ser coerente com todas as notas dadas. Não elogie algo que recebeu nota baixa nem critique algo com nota alta.
+
 CONVERSA:
 """
 
