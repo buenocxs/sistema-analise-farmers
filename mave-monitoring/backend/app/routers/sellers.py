@@ -1,3 +1,4 @@
+from datetime import date as date_type, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,27 +14,40 @@ from app.jobs.analyze_conversations import analyze_seller_conversations
 router = APIRouter(prefix="/sellers", tags=["sellers"])
 
 
+def _seller_base_dict(seller: Seller) -> dict:
+    """Convert seller to dict (base fields only)."""
+    return {
+        "id": seller.id,
+        "name": seller.name,
+        "phone": seller.phone,
+        "team": seller.team,
+        "instance_name": seller.instance_name,
+        "zapi_instance_id": seller.zapi_instance_id,
+        "zapi_instance_token": seller.zapi_instance_token,
+        "is_active": seller.is_active,
+        "active": seller.is_active,
+        "created_at": seller.created_at.isoformat() if seller.created_at else None,
+        "updated_at": seller.updated_at.isoformat() if seller.updated_at else None,
+    }
+
+
 async def _seller_to_dict(db: AsyncSession, seller: Seller) -> dict:
-    """Convert seller to dict with computed fields."""
-    # Total conversations
+    """Convert seller to dict with computed fields (single seller detail)."""
     total_convs = (await db.execute(
         select(func.count(Conversation.id)).where(Conversation.seller_id == seller.id)
     )).scalar() or 0
 
-    # Avg quality score
     avg_score = (await db.execute(
         select(func.avg(ConversationAnalysis.quality_score))
         .join(Conversation)
         .where(Conversation.seller_id == seller.id)
     )).scalar()
 
-    # Avg response time
     avg_rt = (await db.execute(
         select(func.avg(DailyMetric.avg_response_time_seconds))
         .where(DailyMetric.seller_id == seller.id)
     )).scalar()
 
-    # Recent metrics (last 30 days)
     metrics_result = await db.execute(
         select(DailyMetric)
         .where(DailyMetric.seller_id == seller.id)
@@ -54,22 +68,55 @@ async def _seller_to_dict(db: AsyncSession, seller: Seller) -> dict:
         for m in metrics_result.scalars().all()
     ]
 
-    return {
-        "id": seller.id,
-        "name": seller.name,
-        "phone": seller.phone,
-        "team": seller.team,
-        "instance_name": seller.instance_name,
-        "zapi_instance_id": seller.zapi_instance_id,
-        "zapi_instance_token": seller.zapi_instance_token,
-        "is_active": seller.is_active,
-        "created_at": seller.created_at.isoformat() if seller.created_at else None,
-        "updated_at": seller.updated_at.isoformat() if seller.updated_at else None,
+    d = _seller_base_dict(seller)
+    d.update({
         "total_conversations": total_convs,
         "avg_score": round(avg_score, 1) if avg_score else None,
         "avg_response_time_seconds": round(avg_rt, 0) if avg_rt else None,
         "recent_metrics": recent_metrics,
-    }
+    })
+    return d
+
+
+async def _batch_seller_stats(db: AsyncSession, seller_ids: list[int]) -> dict:
+    """Fetch aggregated stats for multiple sellers in batch (3 queries instead of N*4)."""
+    if not seller_ids:
+        return {}
+
+    # 1) Total conversations per seller
+    conv_counts = dict((await db.execute(
+        select(Conversation.seller_id, func.count(Conversation.id))
+        .where(Conversation.seller_id.in_(seller_ids))
+        .group_by(Conversation.seller_id)
+    )).all())
+
+    # 2) Avg quality score per seller
+    avg_scores = dict((await db.execute(
+        select(Conversation.seller_id, func.avg(ConversationAnalysis.quality_score))
+        .join(Conversation)
+        .where(Conversation.seller_id.in_(seller_ids))
+        .group_by(Conversation.seller_id)
+    )).all())
+
+    # 3) Avg response time per seller
+    avg_rts = dict((await db.execute(
+        select(DailyMetric.seller_id, func.avg(DailyMetric.avg_response_time_seconds))
+        .where(DailyMetric.seller_id.in_(seller_ids))
+        .group_by(DailyMetric.seller_id)
+    )).all())
+
+    stats = {}
+    for sid in seller_ids:
+        total = conv_counts.get(sid, 0)
+        score = avg_scores.get(sid)
+        rt = avg_rts.get(sid)
+        stats[sid] = {
+            "total_conversations": total,
+            "avg_score": round(score, 1) if score else None,
+            "avg_response_time_seconds": round(rt, 0) if rt else None,
+            "recent_metrics": [],  # populated below only if needed
+        }
+    return stats
 
 
 @router.get("")
@@ -107,9 +154,15 @@ async def list_sellers(
     result = await db.execute(q)
     sellers = result.scalars().all()
 
+    # Batch fetch stats for all sellers on this page (3 queries instead of N*4)
+    seller_ids = [s.id for s in sellers]
+    stats = await _batch_seller_stats(db, seller_ids)
+
     items = []
     for s in sellers:
-        items.append(await _seller_to_dict(db, s))
+        d = _seller_base_dict(s)
+        d.update(stats.get(s.id, {"total_conversations": 0, "avg_score": None, "avg_response_time_seconds": None, "recent_metrics": []}))
+        items.append(d)
 
     total_pages = max(1, (total + effective_limit - 1) // effective_limit)
     return {"items": items, "sellers": items, "total": total, "total_pages": total_pages, "page": page}
@@ -154,6 +207,9 @@ async def update_seller(seller_id: int, body: SellerUpdate, db: AsyncSession = D
         raise HTTPException(status_code=404, detail="Vendedor não encontrado")
 
     update_data = body.model_dump(exclude_unset=True)
+    # Normalize active → is_active
+    if "active" in update_data:
+        update_data["is_active"] = update_data.pop("active")
     if "phone" in update_data:
         update_data["phone"] = normalize_phone(update_data["phone"])
     for key, value in update_data.items():
@@ -165,28 +221,30 @@ async def update_seller(seller_id: int, body: SellerUpdate, db: AsyncSession = D
 
 @router.delete("/{seller_id}")
 async def delete_seller(seller_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    from sqlalchemy import delete as sql_delete
+    from app.models import Alert, ConversationAnalysis, Message
+
     result = await db.execute(select(Seller).where(Seller.id == seller_id))
     seller = result.scalar_one_or_none()
     if not seller:
         raise HTTPException(status_code=404, detail="Vendedor não encontrado")
-    # Delete related data first (alerts, analyses, messages, conversations)
-    from app.models import Alert, ConversationAnalysis, Message
-    convs = await db.execute(select(Conversation).where(Conversation.seller_id == seller_id))
-    for conv in convs.scalars().all():
-        await db.execute(select(Alert).where(Alert.conversation_id == conv.id))
-        for a in (await db.execute(select(Alert).where(Alert.conversation_id == conv.id))).scalars().all():
-            await db.delete(a)
-        analysis = (await db.execute(select(ConversationAnalysis).where(ConversationAnalysis.conversation_id == conv.id))).scalar_one_or_none()
-        if analysis:
-            await db.delete(analysis)
-        for m in (await db.execute(select(Message).where(Message.conversation_id == conv.id))).scalars().all():
-            await db.delete(m)
-        await db.delete(conv)
+
+    # Get conversation IDs for this seller
+    conv_ids_result = await db.execute(
+        select(Conversation.id).where(Conversation.seller_id == seller_id)
+    )
+    conv_ids = [row[0] for row in conv_ids_result.all()]
+
+    if conv_ids:
+        # Bulk delete related records using SQL DELETE (no N+1)
+        await db.execute(sql_delete(Alert).where(Alert.conversation_id.in_(conv_ids)))
+        await db.execute(sql_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id.in_(conv_ids)))
+        await db.execute(sql_delete(Message).where(Message.conversation_id.in_(conv_ids)))
+        await db.execute(sql_delete(Conversation).where(Conversation.seller_id == seller_id))
+
     # Delete seller-level alerts and daily metrics
-    for a in (await db.execute(select(Alert).where(Alert.seller_id == seller_id))).scalars().all():
-        await db.delete(a)
-    for dm in (await db.execute(select(DailyMetric).where(DailyMetric.seller_id == seller_id))).scalars().all():
-        await db.delete(dm)
+    await db.execute(sql_delete(Alert).where(Alert.seller_id == seller_id))
+    await db.execute(sql_delete(DailyMetric).where(DailyMetric.seller_id == seller_id))
     await db.delete(seller)
     return {"ok": True}
 
@@ -202,8 +260,11 @@ async def get_seller_conversations(
     _user=Depends(get_current_user),
 ):
     result = await db.execute(select(Seller).where(Seller.id == seller_id))
-    if not result.scalar_one_or_none():
+    seller = result.scalar_one_or_none()
+    if not seller:
         raise HTTPException(status_code=404, detail="Vendedor não encontrado")
+
+    seller_info = {"id": seller.id, "name": seller.name}
 
     q = select(Conversation).where(Conversation.seller_id == seller_id).order_by(Conversation.last_message_at.desc().nulls_last())
     count_q = select(func.count(Conversation.id)).where(Conversation.seller_id == seller_id)
@@ -212,8 +273,9 @@ async def get_seller_conversations(
         q = q.where(Conversation.started_at >= date_from)
         count_q = count_q.where(Conversation.started_at >= date_from)
     if date_to:
-        q = q.where(Conversation.started_at <= date_to)
-        count_q = count_q.where(Conversation.started_at <= date_to)
+        date_to_next = str(date_type.fromisoformat(date_to) + timedelta(days=1))
+        q = q.where(Conversation.started_at < date_to_next)
+        count_q = count_q.where(Conversation.started_at < date_to_next)
 
     total = (await db.execute(count_q)).scalar() or 0
     q = q.offset(skip).limit(limit)
@@ -222,8 +284,6 @@ async def get_seller_conversations(
 
     items = []
     for c in conversations:
-        seller_result = await db.execute(select(Seller).where(Seller.id == c.seller_id))
-        seller = seller_result.scalar_one_or_none()
         analysis_dict = None
         if c.analysis:
             analysis_dict = {
@@ -241,7 +301,7 @@ async def get_seller_conversations(
             "last_message_at": c.last_message_at.isoformat() if c.last_message_at else None,
             "status": c.status,
             "is_group": c.is_group,
-            "seller": {"id": seller.id, "name": seller.name} if seller else None,
+            "seller": seller_info,
             "analysis": analysis_dict,
         })
 

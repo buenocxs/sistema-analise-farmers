@@ -1,5 +1,9 @@
+import io
+import csv
+from datetime import date as date_type, timedelta
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -76,7 +80,7 @@ async def list_conversations(
     db: AsyncSession = Depends(get_db),
     _user=Depends(get_current_user),
 ):
-    q = select(Conversation).join(Seller).order_by(Conversation.last_message_at.desc().nulls_last())
+    q = select(Conversation, Seller).join(Seller).order_by(Conversation.last_message_at.desc().nulls_last())
     count_q = select(func.count(Conversation.id)).join(Seller)
 
     if search:
@@ -97,8 +101,10 @@ async def list_conversations(
         q = q.where(Conversation.started_at >= date_from)
         count_q = count_q.where(Conversation.started_at >= date_from)
     if date_to:
-        q = q.where(Conversation.started_at <= date_to)
-        count_q = count_q.where(Conversation.started_at <= date_to)
+        # Make date_to inclusive of the entire day (date string "2026-02-27" → include up to 23:59:59)
+        date_to_next = str(date_type.fromisoformat(date_to) + timedelta(days=1))
+        q = q.where(Conversation.started_at < date_to_next)
+        count_q = count_q.where(Conversation.started_at < date_to_next)
 
     # Sentiment/stage filters require join with analysis
     if sentiment or stage:
@@ -114,15 +120,72 @@ async def list_conversations(
     total = (await db.execute(count_q)).scalar() or 0
     q = q.offset(skip).limit(limit)
     result = await db.execute(q)
-    conversations = result.scalars().all()
+    rows = result.all()
 
     items = []
-    for c in conversations:
-        seller_result = await db.execute(select(Seller).where(Seller.id == c.seller_id))
-        seller = seller_result.scalar_one_or_none()
+    for c, seller in rows:
         items.append(_conv_to_dict(c, seller=seller, analysis=c.analysis))
 
     return {"conversations": items, "items": items, "total": total}
+
+
+@router.get("/export")
+async def export_conversations(
+    seller_id: int | None = None,
+    team: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    q = (
+        select(Conversation, Seller.name.label("seller_name"), Seller.team.label("seller_team"))
+        .join(Seller)
+        .order_by(Conversation.last_message_at.desc().nulls_last())
+    )
+    if seller_id:
+        q = q.where(Conversation.seller_id == seller_id)
+    if team:
+        q = q.where(Seller.team == team)
+    if date_from:
+        q = q.where(Conversation.started_at >= date_from)
+    if date_to:
+        date_to_next = str(date_type.fromisoformat(date_to) + timedelta(days=1))
+        q = q.where(Conversation.started_at < date_to_next)
+
+    result = await db.execute(q)
+    rows = result.all()
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "id", "vendedor", "equipe", "cliente", "telefone_cliente",
+        "mensagens", "inicio", "ultima_mensagem", "status",
+        "sentimento", "qualidade", "estagio",
+    ])
+    for conv, seller_name, seller_team in rows:
+        analysis = conv.analysis
+        writer.writerow([
+            conv.id,
+            seller_name,
+            seller_team,
+            conv.customer_name or "",
+            conv.customer_phone,
+            conv.message_count,
+            conv.started_at.isoformat() if conv.started_at else "",
+            conv.last_message_at.isoformat() if conv.last_message_at else "",
+            conv.status,
+            analysis.sentiment_label if analysis else "",
+            analysis.quality_score if analysis else "",
+            analysis.stage if analysis else "",
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=conversations.csv"},
+    )
 
 
 @router.get("/{conversation_id}")

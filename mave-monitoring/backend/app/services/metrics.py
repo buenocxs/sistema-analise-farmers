@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, date_to: date | None = None, team: str | None = None) -> dict:
     """Compute dashboard statistics."""
     try:
+        # For datetime column comparisons, use date_to + 1 day with < operator
+        # so that "date_to = Feb 27" includes all of Feb 27 (up to 23:59:59)
+        date_to_exclusive = (date_to + timedelta(days=1)) if date_to else None
+
         # Base seller filter
         seller_filter = []
         if team:
@@ -24,8 +28,8 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
             q = q.where(f)
         if date_from:
             q = q.where(Conversation.started_at >= date_from)
-        if date_to:
-            q = q.where(Conversation.started_at <= date_to)
+        if date_to_exclusive:
+            q = q.where(Conversation.started_at < date_to_exclusive)
         total_convs = (await db.execute(q)).scalar() or 0
 
         # Total messages today
@@ -87,6 +91,7 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
 
 async def get_team_comparison(db: AsyncSession, date_from: date | None = None, date_to: date | None = None) -> list:
     """Compare metrics across teams."""
+    date_to_exclusive = (date_to + timedelta(days=1)) if date_to else None
     teams = []
     for team_name in ["closer", "farmer", "pre_sale"]:
         q_sellers = select(func.count(Seller.id)).where(and_(Seller.team == team_name, Seller.is_active == True))
@@ -99,8 +104,8 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
         )
         if date_from:
             q_convs = q_convs.where(Conversation.started_at >= date_from)
-        if date_to:
-            q_convs = q_convs.where(Conversation.started_at <= date_to)
+        if date_to_exclusive:
+            q_convs = q_convs.where(Conversation.started_at < date_to_exclusive)
         total_convs = (await db.execute(q_convs)).scalar() or 0
 
         q_msgs = (
@@ -137,6 +142,7 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
 
 
 async def get_sentiment_distribution(db: AsyncSession, date_from: date | None = None, date_to: date | None = None, team: str | None = None) -> dict:
+    date_to_exclusive = (date_to + timedelta(days=1)) if date_to else None
     q = (
         select(ConversationAnalysis.sentiment_label, func.count(ConversationAnalysis.id))
         .join(Conversation).join(Seller)
@@ -147,8 +153,8 @@ async def get_sentiment_distribution(db: AsyncSession, date_from: date | None = 
         q = q.where(Seller.team == team)
     if date_from:
         q = q.where(Conversation.started_at >= date_from)
-    if date_to:
-        q = q.where(Conversation.started_at <= date_to)
+    if date_to_exclusive:
+        q = q.where(Conversation.started_at < date_to_exclusive)
     rows = (await db.execute(q)).all()
     result = {"positivo": 0, "neutro": 0, "negativo": 0, "frustrado": 0}
     for label, count in rows:
@@ -182,6 +188,7 @@ async def get_response_time_distribution(db: AsyncSession, date_from: date | Non
 
 
 async def get_heatmap(db: AsyncSession, date_from: date | None = None, date_to: date | None = None, team: str | None = None) -> list:
+    date_to_exclusive = (date_to + timedelta(days=1)) if date_to else None
     q = (
         select(
             extract("dow", Message.timestamp).label("day_of_week"),
@@ -196,8 +203,8 @@ async def get_heatmap(db: AsyncSession, date_from: date | None = None, date_to: 
         q = q.where(Seller.team == team)
     if date_from:
         q = q.where(Message.timestamp >= date_from)
-    if date_to:
-        q = q.where(Message.timestamp <= date_to)
+    if date_to_exclusive:
+        q = q.where(Message.timestamp < date_to_exclusive)
     rows = (await db.execute(q)).all()
     return [{"day_of_week": int(r[0]), "hour": int(r[1]), "count": r[2]} for r in rows]
 

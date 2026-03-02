@@ -233,8 +233,8 @@ function ConversationDetail() {
   const handleAnalyze = async () => {
     setAnalyzing(true);
     try {
-      const { data } = await api.default.post(`/conversations/${id}/analyze`);
-      setAnalysis(data);
+      const res = await api.analyzeConversation(id);
+      setAnalysis(res.data);
       toast.success('Análise concluída com sucesso');
     } catch (err) {
       toast.error(err.message || 'Erro ao analisar conversa');

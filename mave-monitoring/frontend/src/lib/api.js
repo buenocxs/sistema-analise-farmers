@@ -103,9 +103,14 @@ export const recalculateMetrics = async (sellerId, days = 30) =>
 export const analyzeAllConversations = async (sellerId, force = false) =>
   post(`/sellers/${sellerId}/analyze-conversations${qs({ force })}`);
 
-export const importConversations = async (_file) => {
-  // TODO: implement file upload when needed
-  return { data: { imported: 0, skipped: 0 } };
+export const analyzeConversation = async (id) =>
+  post(`/conversations/${id}/analyze`);
+
+export const deleteConversation = async (id) => del(`/conversations/${id}`);
+
+export const exportConversations = async (params) => {
+  const blob = await request('GET', `/conversations/export${qs(params)}`, null, true);
+  return blob;
 };
 
 // ---------------------------------------------------------------------------
@@ -183,6 +188,13 @@ export const getExclusionStats = async () => get('/exclusion-list/stats');
 export const getAlerts = async (params = {}) => get('/alerts', params);
 
 export const resolveAlert = async (id) => put(`/alerts/${id}/resolve`);
+
+// ---------------------------------------------------------------------------
+// Alert Config
+// ---------------------------------------------------------------------------
+export const getAlertConfig = async () => get('/alert-config');
+
+export const updateAlertConfig = async (config) => put('/alert-config', config);
 
 // ---------------------------------------------------------------------------
 // Default export — objeto com .get() / .put() para Settings AlertsTab

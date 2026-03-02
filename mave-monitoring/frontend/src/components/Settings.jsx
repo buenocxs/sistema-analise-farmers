@@ -649,7 +649,7 @@ function AlertsTab() {
   useEffect(() => {
     async function loadConfig() {
       try {
-        const { data } = await api.default.get('/alert-config');
+        const { data } = await api.getAlertConfig();
         if (data.maxResponseTime != null) setMaxResponseTime(data.maxResponseTime);
         if (data.daysWithoutFollowUp != null) setDaysWithoutFollowUp(data.daysWithoutFollowUp);
         if (data.unhandledObjectionHours != null) setUnhandledObjectionHours(data.unhandledObjectionHours);
@@ -676,7 +676,7 @@ function AlertsTab() {
         daysWithoutFollowUp,
         unhandledObjectionHours,
       };
-      await api.default.put('/alert-config', thresholds);
+      await api.updateAlertConfig(thresholds);
       // Also keep localStorage as cache
       localStorage.setItem('mave_alert_thresholds', JSON.stringify(thresholds));
       toast.success('Configuracoes de alertas salvas com sucesso');

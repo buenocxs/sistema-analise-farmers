@@ -87,6 +87,17 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
 
                     customer_name = chat.get("name") or chat.get("chatName") or phone
 
+                    # Parse lastMessageTime (milliseconds epoch, may be str or int) from Z-API
+                    last_msg_ts = None
+                    raw_ts = chat.get("lastMessageTime")
+                    if raw_ts:
+                        try:
+                            ts_val = int(raw_ts)
+                            if ts_val > 0:
+                                last_msg_ts = datetime.fromtimestamp(ts_val / 1000, tz=timezone.utc)
+                        except (ValueError, TypeError, OSError):
+                            pass
+
                     if not conv:
                         conv = Conversation(
                             seller_id=seller.id,
@@ -95,6 +106,8 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
                             zapi_chat_id=normalized,
                             is_group=False,
                             status="active",
+                            started_at=last_msg_ts or datetime.now(timezone.utc),
+                            last_message_at=last_msg_ts,
                         )
                         db.add(conv)
                         await db.flush()
@@ -103,6 +116,11 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
                         # Update name if it was empty or just a phone number
                         if not conv.customer_name or conv.customer_name == conv.customer_phone:
                             conv.customer_name = customer_name
+                        # Update last_message_at if Z-API has a newer timestamp
+                        if last_msg_ts and (not conv.last_message_at or last_msg_ts > conv.last_message_at):
+                            conv.last_message_at = last_msg_ts
+                        if not conv.started_at:
+                            conv.started_at = last_msg_ts or datetime.now(timezone.utc)
 
                     update_task(task_id, current=i + 1, message=f"Sincronizado {customer_name} ({i+1}/{total})")
 

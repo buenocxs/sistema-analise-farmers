@@ -38,6 +38,7 @@ class SellerUpdate(BaseModel):
     zapi_instance_id: Optional[str] = None
     zapi_instance_token: Optional[str] = None
     is_active: Optional[bool] = None
+    active: Optional[bool] = None  # frontend compat
 
 class SellerOut(BaseModel):
     id: int
