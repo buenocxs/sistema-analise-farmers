@@ -326,6 +326,44 @@ async def get_trends(db: AsyncSession, weeks: int = 4, date_from: date | None = 
     return result
 
 
+FUNNEL_STAGES = ["prospecção", "qualificação", "negociação", "fechamento", "pós-venda"]
+
+
+async def get_funnel_data(db: AsyncSession, date_from: date | None = None, date_to: date | None = None, seller_id: int | None = None, team: str | None = None) -> list:
+    """Get conversation counts grouped by sales stage (funnel)."""
+    date_to_exclusive = (date_to + timedelta(days=1)) if date_to else None
+    q = (
+        select(ConversationAnalysis.stage, func.count(ConversationAnalysis.id))
+        .join(Conversation).join(Seller)
+        .where(and_(Seller.is_active == True, ConversationAnalysis.stage.isnot(None)))
+        .group_by(ConversationAnalysis.stage)
+    )
+    if team:
+        q = q.where(Seller.team == team)
+    if seller_id:
+        q = q.where(Conversation.seller_id == seller_id)
+    if date_from:
+        q = q.where(Conversation.started_at >= date_from)
+    if date_to_exclusive:
+        q = q.where(Conversation.started_at < date_to_exclusive)
+
+    rows = (await db.execute(q)).all()
+    stage_counts = {label: count for label, count in rows}
+    total = sum(stage_counts.values()) or 1
+
+    result = []
+    for stage in FUNNEL_STAGES:
+        count = stage_counts.get(stage, 0)
+        result.append({"stage": stage, "count": count, "percentage": round(count / total * 100, 1)})
+
+    # Append any stages from DB not in the predefined list
+    for stage, count in stage_counts.items():
+        if stage not in FUNNEL_STAGES:
+            result.append({"stage": stage, "count": count, "percentage": round(count / total * 100, 1)})
+
+    return result
+
+
 async def get_metrics_timeseries(db: AsyncSession, days: int = 30, date_from: date | None = None, date_to: date | None = None, group_by: str = "day", team: str | None = None) -> list:
     from app.services.timezone import today_brt
     end = date_to or today_brt()

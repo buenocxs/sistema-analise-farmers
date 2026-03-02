@@ -15,6 +15,7 @@ from app.services.metrics import (
     get_ranking,
     get_trends,
     get_metrics_timeseries,
+    get_funnel_data,
 )
 
 router = APIRouter(tags=["analytics"])
@@ -130,6 +131,21 @@ async def ranking(
     dt = date.fromisoformat(date_to) if date_to else None
     data = await get_ranking(db, metric=metric, limit=limit, team=team, date_from=df, date_to=dt)
     return {"rankings": data}
+
+
+@router.get("/funnel")
+async def funnel(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    seller_id: int | None = None,
+    team: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    _user=Depends(get_current_user),
+):
+    df = date.fromisoformat(date_from) if date_from else None
+    dt = date.fromisoformat(date_to) if date_to else None
+    data = await get_funnel_data(db, date_from=df, date_to=dt, seller_id=seller_id, team=team)
+    return {"stages": data}
 
 
 @router.get("/metrics/export")

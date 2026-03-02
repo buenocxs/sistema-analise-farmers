@@ -167,6 +167,7 @@ function Dashboard() {
   const [peakHours, setPeakHours] = useState([]);
   const [alerts, setAlerts] = useState([]);
   const [teamSummary, setTeamSummary] = useState([]);
+  const [funnelData, setFunnelData] = useState([]);
 
   const getDateParams = useCallback(() => {
     const params = {};
@@ -207,6 +208,7 @@ function Dashboard() {
         alertsRes,
         teamRes,
         sysStatusRes,
+        funnelRes,
       ] = await Promise.allSettled([
         api.getDashboardStats(params),
         api.getMetrics({ ...params, group_by: 'day' }),
@@ -216,6 +218,7 @@ function Dashboard() {
         api.getAlerts({ resolved: false, limit: 10 }),
         api.getTeamComparison(params),
         api.getSystemStatus(),
+        api.getFunnel(params),
       ]);
 
       if (statsRes.status === 'fulfilled') {
@@ -275,6 +278,11 @@ function Dashboard() {
       if (teamRes.status === 'fulfilled') {
         const raw = teamRes.value.data;
         setTeamSummary(Array.isArray(raw) ? raw : raw?.data || raw?.teams || []);
+      }
+
+      if (funnelRes.status === 'fulfilled') {
+        const raw = funnelRes.value.data;
+        setFunnelData(Array.isArray(raw) ? raw : raw?.stages || raw?.data || []);
       }
     } catch (err) {
       toast.error('Erro ao carregar dados do dashboard');
@@ -673,6 +681,51 @@ function Dashboard() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* Sales Funnel */}
+      <div className="card">
+        <h3 className="text-base font-semibold text-gray-900 mb-4">Funil de Vendas</h3>
+        {loading ? (
+          <Skeleton className="w-full h-[200px]" />
+        ) : funnelData.length > 0 && funnelData.some((s) => s.count > 0) ? (
+          <div className="space-y-2">
+            {(() => {
+              const maxCount = Math.max(...funnelData.map((s) => s.count), 1);
+              const stageColors = [
+                'bg-blue-200 text-blue-900',
+                'bg-blue-300 text-blue-900',
+                'bg-blue-400 text-white',
+                'bg-blue-500 text-white',
+                'bg-blue-600 text-white',
+              ];
+              return funnelData.map((stage, idx) => {
+                const widthPct = Math.max((stage.count / maxCount) * 100, 8);
+                const colorClass = stageColors[idx % stageColors.length];
+                return (
+                  <div key={stage.stage} className="flex items-center gap-3">
+                    <span className="text-xs text-gray-600 w-28 text-right shrink-0 truncate capitalize">
+                      {stage.stage}
+                    </span>
+                    <div className="flex-1 relative">
+                      <div
+                        className={clsx('rounded-md py-1.5 px-3 text-xs font-medium transition-all duration-500 flex items-center justify-between', colorClass)}
+                        style={{ width: `${widthPct}%`, minWidth: 'fit-content' }}
+                      >
+                        <span>{stage.count}</span>
+                        <span className="ml-2 opacity-75">{stage.percentage}%</span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        ) : (
+          <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm">
+            Sem dados de funil — analise conversas para ver os estágios
+          </div>
+        )}
       </div>
 
       {/* Alerts Section */}

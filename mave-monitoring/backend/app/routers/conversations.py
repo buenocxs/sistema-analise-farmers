@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import Seller, Conversation, Message, ConversationAnalysis
+from app.models import Seller, Conversation, Message, ConversationAnalysis, ManagerNote, User
 from app.auth import get_current_user
 from app.jobs.task_manager import create_task, run_background
 from app.jobs.sync_conversations import sync_seller_conversations
@@ -269,6 +269,7 @@ async def delete_conversation(conversation_id: int, db: AsyncSession = Depends(g
 
     # Delete related records first
     from sqlalchemy import delete
+    await db.execute(delete(ManagerNote).where(ManagerNote.conversation_id == conv.id))
     await db.execute(delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == conv.id))
     await db.execute(delete(Message).where(Message.conversation_id == conv.id))
     await db.delete(conv)
@@ -286,3 +287,71 @@ async def sync_conversations(seller_id: int, days: int = Query(7), db: AsyncSess
     task_id = create_task()
     run_background(sync_seller_conversations(seller_id, task_id, days))
     return {"task_id": task_id, "total": 0}
+
+
+# ---------------------------------------------------------------------------
+# Manager Notes
+# ---------------------------------------------------------------------------
+
+class NoteCreate(BaseModel):
+    text: str
+
+
+@router.get("/{conversation_id}/notes")
+async def list_notes(conversation_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    q = (
+        select(ManagerNote, User.name)
+        .join(User, ManagerNote.user_id == User.id)
+        .where(ManagerNote.conversation_id == conversation_id)
+        .order_by(ManagerNote.created_at.desc())
+    )
+    rows = (await db.execute(q)).all()
+    return [
+        {
+            "id": note.id,
+            "text": note.text,
+            "user_id": note.user_id,
+            "user_name": user_name,
+            "created_at": note.created_at.isoformat() if note.created_at else None,
+        }
+        for note, user_name in rows
+    ]
+
+
+@router.post("/{conversation_id}/notes")
+async def create_note(conversation_id: int, body: NoteCreate, db: AsyncSession = Depends(get_db), user=Depends(get_current_user)):
+    result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+
+    note = ManagerNote(
+        conversation_id=conversation_id,
+        user_id=user.id,
+        text=body.text.strip(),
+    )
+    db.add(note)
+    await db.flush()
+
+    return {
+        "id": note.id,
+        "text": note.text,
+        "user_id": note.user_id,
+        "user_name": user.name,
+        "created_at": note.created_at.isoformat() if note.created_at else None,
+    }
+
+
+@router.delete("/{conversation_id}/notes/{note_id}")
+async def delete_note(conversation_id: int, note_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    result = await db.execute(
+        select(ManagerNote).where(ManagerNote.id == note_id, ManagerNote.conversation_id == conversation_id)
+    )
+    note = result.scalar_one_or_none()
+    if not note:
+        raise HTTPException(status_code=404, detail="Nota não encontrada")
+    await db.delete(note)
+    return {"status": "deleted", "id": note_id}

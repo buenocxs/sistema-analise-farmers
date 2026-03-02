@@ -64,6 +64,7 @@ class Conversation(Base):
     messages = relationship("Message", back_populates="conversation", lazy="selectin", order_by="Message.timestamp")
     analysis = relationship("ConversationAnalysis", back_populates="conversation", uselist=False, lazy="selectin")
     alerts = relationship("Alert", back_populates="conversation", lazy="selectin")
+    notes = relationship("ManagerNote", back_populates="conversation", lazy="selectin", order_by="ManagerNote.created_at.desc()")
 
 
 class Message(Base):
@@ -149,6 +150,19 @@ class ExcludedNumber(Base):
     reason = Column(String(255), nullable=True)
     active = Column(Boolean, default=True)
     added_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class ManagerNote(Base):
+    __tablename__ = "manager_notes"
+
+    id = Column(Integer, primary_key=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    text = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    conversation = relationship("Conversation", back_populates="notes")
+    user = relationship("User")
 
 
 class AlertConfig(Base):

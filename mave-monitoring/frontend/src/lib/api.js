@@ -108,6 +108,14 @@ export const analyzeConversation = async (id) =>
 
 export const deleteConversation = async (id) => del(`/conversations/${id}`);
 
+export const getNotes = async (convId) => get(`/conversations/${convId}/notes`);
+
+export const createNote = async (convId, text) =>
+  post(`/conversations/${convId}/notes`, { text });
+
+export const deleteNote = async (convId, noteId) =>
+  del(`/conversations/${convId}/notes/${noteId}`);
+
 export const exportConversations = async (params) => {
   const blob = await request('GET', `/conversations/export${qs(params)}`, null, true);
   return blob;
@@ -135,6 +143,8 @@ export const getHeatmap = async (params) => get('/heatmap', params);
 export const getTrends = async (params = {}) => get('/trends', params);
 
 export const getRanking = async (params = {}) => get('/ranking', params);
+
+export const getFunnel = async (params = {}) => get('/funnel', params);
 
 export const exportMetrics = async (params) => {
   const blob = await request('GET', `/metrics/export${qs(params)}`, null, true);

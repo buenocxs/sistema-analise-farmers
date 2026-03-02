@@ -3,7 +3,7 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
   ArrowLeft, Bot, AlertTriangle, Tag, FileText,
   MessageSquare, Phone, User, Loader2, RefreshCw,
-  CheckCircle, XCircle,
+  CheckCircle, XCircle, StickyNote, Trash2, Send,
 } from 'lucide-react';
 import * as api from '../lib/api';
 import toast from 'react-hot-toast';
@@ -185,6 +185,9 @@ function ConversationDetail() {
   const [alerts, setAlerts] = useState([]);
   const [error, setError] = useState(null);
   const [analyzing, setAnalyzing] = useState(false);
+  const [notes, setNotes] = useState([]);
+  const [newNote, setNewNote] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -196,13 +199,20 @@ function ConversationDetail() {
       setMessages(data?.messages || []);
       setAnalysis(data?.analysis || null);
 
-      // Fetch alerts for this conversation
+      // Fetch alerts and notes for this conversation
       try {
         const alertsRes = await api.getAlerts({ conversation_id: id, resolved: false });
         const alertsData = alertsRes.data;
         setAlerts(Array.isArray(alertsData) ? alertsData : alertsData?.alerts || alertsData?.items || alertsData?.data || []);
       } catch {
         // Alerts fetch is non-critical
+      }
+      try {
+        const notesRes = await api.getNotes(id);
+        const notesData = notesRes.data;
+        setNotes(Array.isArray(notesData) ? notesData : notesData?.notes || []);
+      } catch {
+        // Notes fetch is non-critical
       }
     } catch (err) {
       if (err.response?.status === 404) {
@@ -240,6 +250,33 @@ function ConversationDetail() {
       toast.error(err.message || 'Erro ao analisar conversa');
     } finally {
       setAnalyzing(false);
+    }
+  };
+
+  const handleAddNote = async () => {
+    const text = newNote.trim();
+    if (!text) return;
+    setSavingNote(true);
+    try {
+      const res = await api.createNote(id, text);
+      const note = res.data;
+      setNotes((prev) => [note, ...prev]);
+      setNewNote('');
+      toast.success('Anotação adicionada');
+    } catch {
+      toast.error('Erro ao salvar anotação');
+    } finally {
+      setSavingNote(false);
+    }
+  };
+
+  const handleDeleteNote = async (noteId) => {
+    try {
+      await api.deleteNote(id, noteId);
+      setNotes((prev) => prev.filter((n) => n.id !== noteId));
+      toast.success('Anotação removida');
+    } catch {
+      toast.error('Erro ao remover anotação');
     }
   };
 
@@ -510,6 +547,56 @@ function ConversationDetail() {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* Anotações do Gestor */}
+          <div className="card">
+            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
+              <StickyNote className="w-4 h-4 text-amber-500" />
+              Anotações
+            </h3>
+            {notes.length > 0 && (
+              <div className="space-y-2 mb-3">
+                {notes.map((note) => (
+                  <div key={note.id} className="p-2.5 bg-amber-50 rounded-lg border border-amber-100 group">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="text-sm text-gray-700 leading-relaxed flex-1 whitespace-pre-wrap">{note.text}</p>
+                      <button
+                        onClick={() => handleDeleteNote(note.id)}
+                        className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-50 text-gray-400 hover:text-red-500 transition-all flex-shrink-0"
+                        title="Remover"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      {note.user_name}
+                      {note.created_at && (
+                        <> &middot; {format(parseISO(note.created_at), "dd/MM 'às' HH:mm", { locale: ptBR })}</>
+                      )}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={newNote}
+                onChange={(e) => setNewNote(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleAddNote()}
+                placeholder="Adicionar anotação..."
+                className="input-field flex-1 text-sm"
+              />
+              <button
+                onClick={handleAddNote}
+                disabled={savingNote || !newNote.trim()}
+                className="btn-primary p-2 flex-shrink-0"
+                title="Adicionar"
+              >
+                {savingNote ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+              </button>
+            </div>
           </div>
 
           {/* Objeções */}
