@@ -86,6 +86,9 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
                     conv = existing.scalar_one_or_none()
 
                     customer_name = chat.get("name") or chat.get("chatName") or phone
+                    # If Z-API returned the seller's own name, use phone instead
+                    if customer_name and seller.name and customer_name.strip().lower() == seller.name.strip().lower():
+                        customer_name = phone
 
                     # Parse lastMessageTime (milliseconds epoch, may be str or int) from Z-API
                     last_msg_ts = None
@@ -113,8 +116,10 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
                         await db.flush()
                         conversations_synced += 1
                     else:
-                        # Update name if it was empty or just a phone number
-                        if not conv.customer_name or conv.customer_name == conv.customer_phone:
+                        # Update name if it was empty, just a phone number, or seller's name
+                        if (not conv.customer_name
+                                or conv.customer_name == conv.customer_phone
+                                or (seller.name and conv.customer_name.strip().lower() == seller.name.strip().lower())):
                             conv.customer_name = customer_name
                         # Update last_message_at if Z-API has a newer timestamp
                         if last_msg_ts and (not conv.last_message_at or last_msg_ts > conv.last_message_at):

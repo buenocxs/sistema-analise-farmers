@@ -71,9 +71,15 @@ async def _process_webhook(seller_id: int, payload: dict):
             )
             conv = conv_result.scalar_one_or_none()
             if not conv:
+                # When seller sends first message (fromMe=true), senderName is the
+                # seller's name — NOT the customer's. Use chatName or phone instead.
+                if from_me:
+                    cust_name = payload.get("chatName") or phone
+                else:
+                    cust_name = payload.get("senderName") or payload.get("chatName") or phone
                 conv = Conversation(
                     seller_id=seller.id,
-                    customer_name=payload.get("senderName") or payload.get("chatName") or phone,
+                    customer_name=cust_name,
                     customer_phone=normalized,
                     zapi_chat_id=normalized,
                     is_group=False,
@@ -109,6 +115,16 @@ async def _process_webhook(seller_id: int, payload: dict):
                 from_me=from_me,
             )
             db.add(msg)
+
+            # When customer sends a message, update customer_name if it was
+            # wrong (e.g. set to seller's name or just a phone number)
+            if not from_me:
+                real_name = payload.get("senderName") or payload.get("chatName")
+                if real_name and real_name != conv.customer_name:
+                    # Replace if current name is just a phone number or matches seller
+                    current = conv.customer_name or ""
+                    if current == conv.customer_phone or current == phone or current == seller.name:
+                        conv.customer_name = real_name
 
             # Update conversation metadata
             conv.message_count = (conv.message_count or 0) + 1
