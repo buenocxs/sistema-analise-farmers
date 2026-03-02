@@ -268,7 +268,6 @@ async def delete_conversation(conversation_id: int, db: AsyncSession = Depends(g
         raise HTTPException(status_code=404, detail="Conversa não encontrada")
 
     # Delete related records first
-    await db.execute(select(Message).where(Message.conversation_id == conv.id))
     from sqlalchemy import delete
     await db.execute(delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == conv.id))
     await db.execute(delete(Message).where(Message.conversation_id == conv.id))

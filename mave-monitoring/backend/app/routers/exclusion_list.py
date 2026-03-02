@@ -87,25 +87,22 @@ async def remove_excluded(number_id: int, db: AsyncSession = Depends(get_db), _u
 
 @router.post("/bulk-delete")
 async def bulk_delete(body: ExclusionBulkDeleteRequest, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
-    deleted = 0
-    for nid in body.ids:
-        result = await db.execute(select(ExcludedNumber).where(ExcludedNumber.id == nid))
-        number = result.scalar_one_or_none()
-        if number:
-            await db.delete(number)
-            deleted += 1
-    return {"deleted": deleted}
+    if not body.ids:
+        return {"deleted": 0}
+    from sqlalchemy import delete
+    result = await db.execute(
+        delete(ExcludedNumber).where(ExcludedNumber.id.in_(body.ids))
+    )
+    return {"deleted": result.rowcount}
 
 
 @router.post("/clear")
 async def clear_exclusion_list(body: ExclusionClearRequest, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
     if body.token != "CONFIRMAR":
         raise HTTPException(status_code=400, detail="Token de confirmação inválido")
-    result = await db.execute(select(ExcludedNumber))
-    numbers = result.scalars().all()
-    for n in numbers:
-        await db.delete(n)
-    return {"ok": True}
+    from sqlalchemy import delete
+    result = await db.execute(delete(ExcludedNumber))
+    return {"ok": True, "deleted": result.rowcount}
 
 
 @router.get("/stats")

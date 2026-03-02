@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search, Filter, Download, ChevronLeft, ChevronRight, X,
@@ -68,6 +68,8 @@ function ConversationsList() {
 
   // Filter state (initialized from URL params)
   const [search, setSearch] = useState(searchParams.get('search') || '');
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  const debounceTimer = useRef(null);
   const [sellerId, setSellerId] = useState(searchParams.get('seller_id') || '');
   const [team, setTeam] = useState(searchParams.get('team') || '');
   const [sentiment, setSentiment] = useState(searchParams.get('sentiment') || '');
@@ -97,9 +99,18 @@ function ConversationsList() {
       });
   }, []);
 
+  // Debounce search input (400ms)
+  useEffect(() => {
+    debounceTimer.current = setTimeout(() => {
+      setDebouncedSearch(search);
+      setPage(0);
+    }, 400);
+    return () => clearTimeout(debounceTimer.current);
+  }, [search]);
+
   const buildParams = useCallback(() => {
     const params = { skip: page * limit, limit };
-    if (search.trim()) params.search = search.trim();
+    if (debouncedSearch.trim()) params.search = debouncedSearch.trim();
     if (sellerId) params.seller_id = parseInt(sellerId, 10);
     if (team) params.team = team;
     if (sentiment) params.sentiment = sentiment;
@@ -108,7 +119,7 @@ function ConversationsList() {
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;
     return params;
-  }, [search, sellerId, team, sentiment, stage, status, dateFrom, dateTo, page]);
+  }, [debouncedSearch, sellerId, team, sentiment, stage, status, dateFrom, dateTo, page]);
 
   const fetchConversations = useCallback(async () => {
     setLoading(true);
@@ -164,7 +175,7 @@ function ConversationsList() {
       const params = buildParams();
       delete params.skip;
       delete params.limit;
-      const blob = await api.exportMetrics(params);
+      const blob = await api.exportConversations(params);
       const url = window.URL.createObjectURL(new Blob([blob]));
       const link = document.createElement('a');
       link.href = url;
@@ -214,7 +225,7 @@ function ConversationsList() {
             <input
               type="text"
               value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(0); }}
+              onChange={(e) => setSearch(e.target.value)}
               placeholder="Buscar cliente ou telefone..."
               className="input-field pl-9"
             />

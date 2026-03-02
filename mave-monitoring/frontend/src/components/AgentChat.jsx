@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Bot, Send, User, Sparkles } from 'lucide-react';
+import DOMPurify from 'dompurify';
 import * as api from '../lib/api';
 import toast from 'react-hot-toast';
 
@@ -98,7 +99,7 @@ function ChatMessage({ message }) {
       <div className="bg-white rounded-2xl rounded-tl-md px-4 py-3 border border-gray-200 shadow-sm flex-1 min-w-0">
         <div
           className="text-sm text-gray-700 leading-relaxed prose-sm break-words"
-          dangerouslySetInnerHTML={{ __html: formatAIResponse(message.content) }}
+          dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(formatAIResponse(message.content)) }}
         />
       </div>
     </div>
