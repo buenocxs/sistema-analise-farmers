@@ -2,7 +2,11 @@ import re
 
 
 def normalize_phone(phone: str) -> str:
-    """Normalize phone to digits-only format with country code."""
+    """Normalize phone to digits-only format with country code.
+
+    Returns empty string for invalid phones (e.g. @lid IDs).
+    Valid Brazilian phones: 55 + DDD(2) + number(8-9) = 12 or 13 digits.
+    """
     if not phone:
         return ""
     digits = re.sub(r"\D", "", phone)
@@ -11,7 +15,17 @@ def normalize_phone(phone: str) -> str:
     # Add Brazil country code if missing
     if len(digits) == 10 or len(digits) == 11:
         digits = "55" + digits
+    # Validate: must be 12-13 digits starting with 55
+    if not is_valid_br_phone(digits):
+        return ""
     return digits
+
+
+def is_valid_br_phone(digits: str) -> bool:
+    """Check if digits represent a valid Brazilian phone number."""
+    if not digits:
+        return False
+    return digits.startswith("55") and len(digits) in (12, 13)
 
 
 def format_phone_display(phone: str) -> str:

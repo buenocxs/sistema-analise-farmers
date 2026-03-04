@@ -13,6 +13,9 @@ import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { format, subDays, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { HelpTooltip } from '../components/Tooltip';
+import { EmptyState } from '../components/EmptyState';
+import { WelcomeCard } from '../components/WelcomeCard';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -57,15 +60,15 @@ const TEAM_COLORS = { closer: 'blue', farmer: 'green', pre_sale: 'orange' };
 // ---------------------------------------------------------------------------
 
 function Skeleton({ className }) {
-  return <div className={clsx('animate-pulse bg-gray-200 rounded', className)} />;
+  return <div className={clsx('skeleton-shimmer rounded', className)} />;
 }
 
-function StatCard({ icon: Icon, label, value, change, color, loading }) {
+function StatCard({ icon: Icon, label, value, change, color, loading, helpText }) {
   const colorMap = {
-    blue: 'bg-blue-50 text-blue-600',
-    green: 'bg-green-50 text-green-600',
-    orange: 'bg-orange-50 text-orange-600',
-    purple: 'bg-purple-50 text-purple-600',
+    blue: { icon: 'bg-blue-50 text-blue-600', border: 'border-l-blue-500' },
+    green: { icon: 'bg-green-50 text-green-600', border: 'border-l-green-500' },
+    orange: { icon: 'bg-orange-50 text-orange-600', border: 'border-l-orange-500' },
+    purple: { icon: 'bg-purple-50 text-purple-600', border: 'border-l-purple-500' },
   };
 
   if (loading) {
@@ -82,11 +85,12 @@ function StatCard({ icon: Icon, label, value, change, color, loading }) {
   }
 
   const isPositive = change >= 0;
+  const colors = colorMap[color] || colorMap.blue;
 
   return (
-    <div className="card animate-fade-in">
+    <div className={clsx('card border-l-4 animate-fade-in', colors.border)}>
       <div className="flex items-start justify-between">
-        <div className={clsx('w-10 h-10 rounded-lg flex items-center justify-center', colorMap[color])}>
+        <div className={clsx('w-10 h-10 rounded-lg flex items-center justify-center', colors.icon)}>
           <Icon className="w-5 h-5" />
         </div>
         {change !== null && change !== undefined && (
@@ -103,7 +107,10 @@ function StatCard({ icon: Icon, label, value, change, color, loading }) {
       </div>
       <div className="mt-3">
         <p className="text-2xl font-bold text-gray-900">{value}</p>
-        <p className="text-sm text-gray-500 mt-0.5">{label}</p>
+        <div className="flex items-center gap-1.5 mt-0.5">
+          <p className="text-sm text-gray-500">{label}</p>
+          {helpText && <HelpTooltip text={helpText} position="right" />}
+        </div>
       </div>
     </div>
   );
@@ -367,6 +374,9 @@ function Dashboard() {
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* Welcome card for first-time users */}
+      <WelcomeCard />
+
       {/* Period selector */}
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative">
@@ -454,6 +464,7 @@ function Dashboard() {
       )}
 
       {/* Stats Cards */}
+      <div className="section-divider"><span>Métricas</span></div>
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={MessageSquare}
@@ -462,14 +473,16 @@ function Dashboard() {
           change={convChange}
           color="blue"
           loading={loading}
+          helpText="Número total de conversas no período selecionado."
         />
         <StatCard
           icon={Send}
-          label="Mensagens Enviadas"
+          label="Mensagens Hoje"
           value={messagesSent.toLocaleString('pt-BR')}
           change={msgChange}
           color="green"
           loading={loading}
+          helpText="Total de mensagens enviadas pelos vendedores hoje."
         />
         <StatCard
           icon={Clock}
@@ -478,22 +491,28 @@ function Dashboard() {
           change={respChange}
           color="orange"
           loading={loading}
+          helpText="Média de tempo para responder o cliente. Ideal: abaixo de 5 minutos."
         />
         <StatCard
           icon={Star}
-          label="Score Médio Qualidade"
+          label="Score Qualidade"
           value={avgQuality ? Number(avgQuality).toFixed(1) : '0.0'}
           change={qualChange}
           color="purple"
           loading={loading}
+          helpText="Nota média de qualidade (0-10), gerada pela IA com 7 critérios."
         />
       </div>
 
       {/* Charts Row 1 */}
+      <div className="section-divider"><span>Gráficos</span></div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Line chart: Conversas por Dia */}
         <div className="card lg:col-span-2">
-          <h3 className="text-base font-semibold text-gray-900 mb-4">Conversas por Dia</h3>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            Conversas por Dia
+            <HelpTooltip text="Evolução diária de conversas e mensagens no período." />
+          </h3>
           {loading ? (
             <Skeleton className="w-full h-[280px]" />
           ) : conversationsPerDay.length > 0 ? (
@@ -526,15 +545,21 @@ function Dashboard() {
               </LineChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-[280px] flex items-center justify-center text-gray-400 text-sm">
-              Sem dados para o período selecionado
-            </div>
+            <EmptyState
+              icon={MessageSquare}
+              title="Sem dados para o período selecionado"
+              description="Tente ampliar o período ou sincronizar novas conversas."
+              className="h-[280px]"
+            />
           )}
         </div>
 
         {/* Pie chart: Distribuição de Sentimentos */}
         <div className="card">
-          <h3 className="text-base font-semibold text-gray-900 mb-4">Distribuição de Sentimentos</h3>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            Distribuição de Sentimentos
+            <HelpTooltip text="Proporção de conversas por sentimento do cliente." />
+          </h3>
           {loading ? (
             <Skeleton className="w-full h-[280px]" />
           ) : sentimentDist.length > 0 ? (
@@ -583,9 +608,12 @@ function Dashboard() {
               </div>
             </div>
           ) : (
-            <div className="h-[280px] flex items-center justify-center text-gray-400 text-sm">
-              Sem dados de sentimento
-            </div>
+            <EmptyState
+              icon={MessageSquare}
+              title="Sem dados de sentimento"
+              description="Os sentimentos são gerados pela análise IA das conversas."
+              className="h-[280px]"
+            />
           )}
         </div>
       </div>
@@ -594,7 +622,10 @@ function Dashboard() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Bar chart: Ranking de Vendedores */}
         <div className="card">
-          <h3 className="text-base font-semibold text-gray-900 mb-4">Ranking de Vendedores</h3>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            Ranking de Vendedores
+            <HelpTooltip text="Classificação dos vendedores por score de qualidade. Os 3 primeiros são destacados." />
+          </h3>
           {loading ? (
             <Skeleton className="w-full h-[320px]" />
           ) : sellerRanking.length > 0 ? (
@@ -628,15 +659,21 @@ function Dashboard() {
               </BarChart>
             </ResponsiveContainer>
           ) : (
-            <div className="h-[320px] flex items-center justify-center text-gray-400 text-sm">
-              Sem dados de ranking
-            </div>
+            <EmptyState
+              icon={Star}
+              title="Sem dados de ranking"
+              description="Analise conversas para gerar o ranking de vendedores."
+              className="h-[320px]"
+            />
           )}
         </div>
 
         {/* Heatmap: Horários de Pico */}
         <div className="card">
-          <h3 className="text-base font-semibold text-gray-900 mb-4">Horários de Pico</h3>
+          <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+            Horários de Pico
+            <HelpTooltip text="Mapa de calor dos horários com mais atividade. Cores escuras = mais mensagens." />
+          </h3>
           {loading ? (
             <Skeleton className="w-full h-[320px]" />
           ) : heatmapGrid.length > 0 ? (
@@ -676,16 +713,22 @@ function Dashboard() {
               </div>
             </div>
           ) : (
-            <div className="h-[320px] flex items-center justify-center text-gray-400 text-sm">
-              Sem dados de horários
-            </div>
+            <EmptyState
+              icon={Clock}
+              title="Sem dados de horários"
+              description="Sincronize conversas para ver os horários de pico."
+              className="h-[320px]"
+            />
           )}
         </div>
       </div>
 
       {/* Sales Funnel */}
       <div className="card">
-        <h3 className="text-base font-semibold text-gray-900 mb-4">Funil de Vendas</h3>
+        <h3 className="text-base font-semibold text-gray-900 mb-4 flex items-center gap-2">
+          Funil de Vendas
+          <HelpTooltip text="Distribuição das conversas por estágio do funil de vendas." />
+        </h3>
         {loading ? (
           <Skeleton className="w-full h-[200px]" />
         ) : funnelData.length > 0 && funnelData.some((s) => s.count > 0) ? (
@@ -722,18 +765,23 @@ function Dashboard() {
             })()}
           </div>
         ) : (
-          <div className="h-[200px] flex items-center justify-center text-gray-400 text-sm">
-            Sem dados de funil — analise conversas para ver os estágios
-          </div>
+          <EmptyState
+            icon={MessageSquare}
+            title="Sem dados de funil"
+            description="Analise conversas para ver a distribuição por estágio."
+            className="py-8"
+          />
         )}
       </div>
 
       {/* Alerts Section */}
+      <div className="section-divider"><span>Alertas e Equipes</span></div>
       <div className="card">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-base font-semibold text-gray-900 flex items-center gap-2">
             <AlertTriangle className="w-5 h-5 text-orange-500" />
             Alertas Recentes
+            <HelpTooltip text="Alertas gerados quando limites de tempo de resposta ou follow-up são ultrapassados." />
           </h3>
           <span className="text-xs text-gray-500">
             {alerts.length} pendente{alerts.length !== 1 ? 's' : ''}
@@ -779,7 +827,12 @@ function Dashboard() {
             ))}
           </div>
         ) : (
-          <p className="text-sm text-gray-400 text-center py-6">Nenhum alerta pendente</p>
+          <EmptyState
+            icon={AlertTriangle}
+            title="Nenhum alerta pendente"
+            description="Os alertas aparecem quando limites configurados são ultrapassados."
+            className="py-6"
+          />
         )}
       </div>
 
@@ -837,7 +890,12 @@ function Dashboard() {
           </div>
         ) : (
           <div className="card">
-            <p className="text-sm text-gray-400 text-center py-4">Sem dados de equipe para o período</p>
+            <EmptyState
+              icon={MessageSquare}
+              title="Sem dados de equipe"
+              description="Cadastre vendedores e sincronize conversas para ver o resumo por equipe."
+              className="py-4"
+            />
           </div>
         )}
       </div>

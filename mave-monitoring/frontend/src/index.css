@@ -139,6 +139,25 @@ body {
   .sidebar-link-inactive {
     @apply sidebar-link text-gray-600 hover:bg-gray-100 hover:text-gray-900;
   }
+
+  /* Striped table rows */
+  .table-striped tbody tr:nth-child(even) {
+    @apply bg-gray-50/40;
+  }
+
+  /* Section divider */
+  .section-divider {
+    @apply flex items-center gap-3 pt-2 pb-1;
+  }
+
+  .section-divider span {
+    @apply text-[11px] font-semibold text-gray-400 uppercase tracking-wider whitespace-nowrap;
+  }
+
+  .section-divider::after {
+    content: '';
+    @apply flex-1 h-px bg-gray-200;
+  }
 }
 
 /* ===== Animation Utilities ===== */
@@ -194,4 +213,24 @@ body {
 .recharts-legend-item-text {
   font-size: 13px !important;
   color: #374151 !important;
+}
+
+.recharts-tooltip-wrapper {
+  filter: drop-shadow(0 4px 6px rgb(0 0 0 / 0.07));
+}
+
+/* ===== Shimmer Skeleton ===== */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton-shimmer {
+  background: linear-gradient(90deg, #e5e7eb 25%, #f3f4f6 50%, #e5e7eb 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
 }

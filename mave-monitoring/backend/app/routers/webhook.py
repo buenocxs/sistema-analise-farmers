@@ -29,11 +29,18 @@ async def _process_webhook(seller_id: int, payload: dict):
             from_me = payload.get("fromMe", False)
 
             # Extract customer phone.
-            # "Ao receber": phone = customer's phone (correct)
-            # "Ao enviar":  phone = seller's own phone (wrong!) — use chatId instead
+            # chatId formats from Z-API:
+            #   "5511999999999@c.us"      — real phone (preferred)
+            #   "5511999999999@s.whatsapp.net" — real phone
+            #   "123456789012345@lid"      — linked device ID (NOT a phone!)
             chat_id = payload.get("chatId", "")
-            if chat_id:
-                # chatId is like "5511999999999@c.us" — always the customer
+            lid_id = ""  # store @lid reference for fallback matching
+
+            if chat_id and "@lid" in chat_id:
+                # Linked device ID — use the "phone" field instead
+                lid_id = chat_id.split("@")[0]
+                phone = payload.get("phone", "")
+            elif chat_id:
                 phone = chat_id.split("@")[0]
             else:
                 phone = payload.get("phone", "")
@@ -45,10 +52,11 @@ async def _process_webhook(seller_id: int, payload: dict):
                 logger.debug(f"Webhook: skipping message to/from seller's own number {normalized}")
                 return
 
-            if not normalized:
+            if not normalized and not lid_id:
+                logger.debug(f"Webhook: no valid phone or lid_id, skipping")
                 return
 
-            # Check exclusion
+            # Check exclusion (only if we have a real phone)
             excl = await db.execute(
                 select(ExcludedNumber).where(ExcludedNumber.phone_normalized == normalized, ExcludedNumber.active == True)
             )
@@ -62,14 +70,32 @@ async def _process_webhook(seller_id: int, payload: dict):
                 if exists.scalar_one_or_none():
                     return
 
-            # Upsert conversation — use normalized phone + seller_id as unique key
-            conv_result = await db.execute(
-                select(Conversation).where(and_(
-                    Conversation.seller_id == seller.id,
-                    Conversation.customer_phone == normalized,
-                ))
-            )
-            conv = conv_result.scalar_one_or_none()
+            # Upsert conversation — match by normalized phone OR by @lid ID
+            conv = None
+            if normalized:
+                conv_result = await db.execute(
+                    select(Conversation).where(and_(
+                        Conversation.seller_id == seller.id,
+                        Conversation.customer_phone == normalized,
+                    ))
+                )
+                conv = conv_result.scalar_one_or_none()
+
+            # If no match by phone and we have a @lid, try matching by lid
+            if not conv and lid_id:
+                conv_result = await db.execute(
+                    select(Conversation).where(and_(
+                        Conversation.seller_id == seller.id,
+                        Conversation.customer_phone == lid_id,
+                    ))
+                )
+                conv = conv_result.scalar_one_or_none()
+                # If found by lid and we now have a real phone, update it
+                if conv and normalized:
+                    logger.info(f"Webhook: upgrading @lid conv {conv.id} phone {conv.customer_phone} -> {normalized}")
+                    conv.customer_phone = normalized
+                    conv.zapi_chat_id = normalized
+
             if not conv:
                 # When seller sends first message (fromMe=true), senderName is the
                 # seller's name — NOT the customer's. Use chatName or phone instead.
@@ -80,8 +106,8 @@ async def _process_webhook(seller_id: int, payload: dict):
                 conv = Conversation(
                     seller_id=seller.id,
                     customer_name=cust_name,
-                    customer_phone=normalized,
-                    zapi_chat_id=normalized,
+                    customer_phone=normalized or lid_id,
+                    zapi_chat_id=normalized or lid_id,
                     is_group=False,
                     status="active",
                 )

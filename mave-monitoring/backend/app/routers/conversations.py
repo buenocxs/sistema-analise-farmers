@@ -355,3 +355,104 @@ async def delete_note(conversation_id: int, note_id: int, db: AsyncSession = Dep
         raise HTTPException(status_code=404, detail="Nota não encontrada")
     await db.delete(note)
     return {"status": "deleted", "id": note_id}
+
+
+# ---------------------------------------------------------------------------
+# Merge duplicate conversations (@lid cleanup)
+# ---------------------------------------------------------------------------
+
+@router.post("/merge-duplicates")
+async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    """Find conversations with @lid phone IDs and merge them into the real phone conversation.
+
+    For each seller, find conversations where customer_phone is not a valid
+    BR phone (12-13 digits starting with 55). If another conversation exists
+    for the same seller with a real phone and the same customer_name, merge
+    messages into that one and delete the @lid conversation.
+    """
+    from sqlalchemy import delete as sa_delete, update as sa_update
+    from app.services.phone_normalizer import is_valid_br_phone
+
+    # Get all conversations
+    result = await db.execute(
+        select(Conversation).order_by(Conversation.seller_id, Conversation.customer_phone)
+    )
+    all_convs = list(result.scalars().all())
+
+    # Separate into real-phone and lid conversations per seller
+    from collections import defaultdict
+    by_seller_real = defaultdict(list)   # seller_id -> [conv with real phone]
+    lid_convs = []                        # conversations with @lid phone
+
+    for conv in all_convs:
+        if is_valid_br_phone(conv.customer_phone or ""):
+            by_seller_real[conv.seller_id].append(conv)
+        else:
+            lid_convs.append(conv)
+
+    merged = 0
+    deleted_orphans = 0
+
+    for lid_conv in lid_convs:
+        # Try to find a matching real-phone conversation for the same seller
+        real_match = None
+        lid_name = (lid_conv.customer_name or "").strip().lower()
+
+        for real_conv in by_seller_real.get(lid_conv.seller_id, []):
+            real_name = (real_conv.customer_name or "").strip().lower()
+            # Match by name (skip if name is just a phone or @lid)
+            if lid_name and real_name and lid_name == real_name and "@lid" not in lid_name:
+                real_match = real_conv
+                break
+
+        if real_match:
+            # Merge: move all messages from lid_conv to real_match
+            await db.execute(
+                sa_update(Message)
+                .where(Message.conversation_id == lid_conv.id)
+                .values(conversation_id=real_match.id)
+            )
+            # Move notes
+            await db.execute(
+                sa_update(ManagerNote)
+                .where(ManagerNote.conversation_id == lid_conv.id)
+                .values(conversation_id=real_match.id)
+            )
+            # Delete lid_conv analysis
+            await db.execute(
+                sa_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == lid_conv.id)
+            )
+            # Update message_count on real_match
+            msg_count = await db.execute(
+                select(func.count(Message.id)).where(Message.conversation_id == real_match.id)
+            )
+            real_match.message_count = msg_count.scalar() or 0
+            # Update last_message_at
+            last_msg = await db.execute(
+                select(func.max(Message.timestamp)).where(Message.conversation_id == real_match.id)
+            )
+            ts = last_msg.scalar()
+            if ts:
+                real_match.last_message_at = ts
+            # Delete the lid conversation
+            await db.delete(lid_conv)
+            merged += 1
+        else:
+            # No matching real conversation — check if lid_conv has 0 messages
+            msg_count = await db.execute(
+                select(func.count(Message.id)).where(Message.conversation_id == lid_conv.id)
+            )
+            if (msg_count.scalar() or 0) == 0:
+                # Delete empty @lid conversation
+                await db.execute(sa_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == lid_conv.id))
+                await db.execute(sa_delete(ManagerNote).where(ManagerNote.conversation_id == lid_conv.id))
+                await db.delete(lid_conv)
+                deleted_orphans += 1
+
+    await db.commit()
+    return {
+        "merged": merged,
+        "deleted_empty": deleted_orphans,
+        "lid_total": len(lid_convs),
+        "real_total": sum(len(v) for v in by_seller_real.values()),
+    }

@@ -68,6 +68,8 @@ async def sync_seller_conversations(seller_id: int, task_id: str, days: int = 7)
 
                     normalized = normalize_phone(phone)
                     if not normalized:
+                        # Invalid phone (e.g. @lid ID) — skip during sync
+                        update_task(task_id, current=i + 1, message=f"Telefone inválido ({i+1}/{total})")
                         skipped += 1
                         continue
 

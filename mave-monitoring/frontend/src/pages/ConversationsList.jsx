@@ -9,6 +9,7 @@ import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { EmptyState } from '../components/EmptyState';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -55,7 +56,7 @@ const TEAM_OPTIONS = [
 ];
 
 function Skeleton({ className }) {
-  return <div className={clsx('animate-pulse bg-gray-200 rounded', className)} />;
+  return <div className={clsx('skeleton-shimmer rounded', className)} />;
 }
 
 // ---------------------------------------------------------------------------
@@ -328,7 +329,7 @@ function ConversationsList() {
           </div>
         ) : conversations.length > 0 ? (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[900px]">
+            <table className="w-full min-w-[900px] table-striped">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-200">
                   <th className="table-header">Vendedor</th>
@@ -422,15 +423,14 @@ function ConversationsList() {
             </table>
           </div>
         ) : (
-          <div className="py-16 text-center">
-            <MessageSquare className="w-10 h-10 text-gray-300 mx-auto mb-3" />
-            <p className="text-gray-500 text-sm">Nenhuma conversa encontrada</p>
-            {hasFilters && (
-              <button onClick={clearFilters} className="btn-ghost text-sm mt-2">
-                Limpar filtros
-              </button>
-            )}
-          </div>
+          <EmptyState
+            icon={MessageSquare}
+            title="Nenhuma conversa encontrada"
+            description={hasFilters ? 'Tente ajustar os filtros de busca.' : 'Sincronize conversas de um vendedor para começar.'}
+            action={hasFilters ? clearFilters : undefined}
+            actionLabel={hasFilters ? 'Limpar filtros' : undefined}
+            className="py-16"
+          />
         )}
       </div>
 

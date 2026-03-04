@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import {
-  ArrowLeft, Bot, AlertTriangle, Tag, FileText,
+  ArrowLeft, Bot, AlertTriangle, FileText,
   MessageSquare, Phone, User, Loader2, RefreshCw,
   CheckCircle, XCircle, StickyNote, Trash2, Send,
 } from 'lucide-react';
@@ -10,6 +10,8 @@ import toast from 'react-hot-toast';
 import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+import { HelpTooltip } from '../components/Tooltip';
+import { EmptyState } from '../components/EmptyState';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -38,7 +40,7 @@ const SEVERITY_STYLES = {
 // ---------------------------------------------------------------------------
 
 function Skeleton({ className }) {
-  return <div className={clsx('animate-pulse bg-gray-200 rounded', className)} />;
+  return <div className={clsx('skeleton-shimmer rounded', className)} />;
 }
 
 function qualityLabel(score) {
@@ -313,7 +315,6 @@ function ConversationDetail() {
             <Skeleton className="w-full h-56 rounded-xl" />
             <Skeleton className="w-full h-36 rounded-xl" />
             <Skeleton className="w-full h-28 rounded-xl" />
-            <Skeleton className="w-full h-28 rounded-xl" />
           </div>
         </div>
       </div>
@@ -375,7 +376,6 @@ function ConversationDetail() {
     }
   }
 
-  const keywords = analysis?.keywords || [];
   const sentimentKey = (analysis?.sentiment_label || '').toLowerCase();
   const sentimentStyle = SENTIMENT_STYLES[sentimentKey] || { bg: 'bg-gray-100', text: 'text-gray-800' };
 
@@ -470,7 +470,8 @@ function ConversationDetail() {
         </div>
 
         {/* Right panel: Analysis */}
-        <div className="lg:col-span-2 space-y-4">
+        <div className="lg:col-span-2">
+          <div className="lg:sticky lg:top-[80px] space-y-4 lg:max-h-[calc(100vh-100px)] lg:overflow-y-auto lg:pr-1">
           {/* Análise IA */}
           <div className="card">
             <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-4">
@@ -482,7 +483,10 @@ function ConversationDetail() {
               <div className="space-y-4">
                 {/* Sentimento */}
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Sentimento</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                    Sentimento
+                    <HelpTooltip text="Humor do cliente: positivo, neutro, negativo ou frustrado." />
+                  </p>
                   <div className="flex items-center gap-2">
                     <span className={clsx('badge', sentimentStyle.bg, sentimentStyle.text)}>
                       {analysis.sentiment_label || '-'}
@@ -497,20 +501,29 @@ function ConversationDetail() {
 
                 {/* Qualidade */}
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Qualidade</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                    Qualidade
+                    <HelpTooltip text="Nota de 0 a 10 baseada em 7 critérios: abordagem, necessidade, produto, objeções, agilidade, fechamento e profissionalismo." />
+                  </p>
                   <QualityBar score={analysis.quality_score} />
                   <QualityBreakdown breakdown={analysis.quality_breakdown} />
                 </div>
 
                 {/* Estágio */}
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Estágio</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                    Estágio
+                    <HelpTooltip text="Fase atual da negociação no funil de vendas." />
+                  </p>
                   <span className="badge badge-blue">{analysis.stage || '-'}</span>
                 </div>
 
                 {/* Tom */}
                 <div>
-                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5">Tom</p>
+                  <p className="text-xs text-gray-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                    Tom
+                    <HelpTooltip text="Tom geral da comunicação do vendedor." />
+                  </p>
                   <span className="badge badge-gray">{analysis.tone || '-'}</span>
                 </div>
 
@@ -533,8 +546,13 @@ function ConversationDetail() {
               </div>
             ) : (
               <div className="text-center py-8">
-                <Bot className="w-10 h-10 text-gray-300 mx-auto mb-2" />
-                <p className="text-sm text-gray-400 mb-3">Conversa ainda não analisada</p>
+                <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-3">
+                  <Bot className="w-7 h-7 text-gray-400" />
+                </div>
+                <p className="text-sm font-medium text-gray-600 mb-1">Conversa não analisada</p>
+                <p className="text-xs text-gray-400 mb-4 max-w-[220px] mx-auto">
+                  Clique abaixo para a IA analisar sentimento, qualidade e objeções.
+                </p>
                 <button onClick={handleAnalyze} disabled={analyzing} className="btn-primary text-sm">
                   {analyzing ? (
                     <span className="flex items-center gap-2">
@@ -554,6 +572,7 @@ function ConversationDetail() {
             <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
               <StickyNote className="w-4 h-4 text-amber-500" />
               Anotações
+              <HelpTooltip text="Notas do gestor sobre esta conversa. Visível apenas para gestores." position="right" />
             </h3>
             {notes.length > 0 && (
               <div className="space-y-2 mb-3">
@@ -604,6 +623,7 @@ function ConversationDetail() {
             <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
               <FileText className="w-4 h-4 text-orange-500" />
               Objeções
+              <HelpTooltip text="Objeções do cliente. Verde = tratada pelo vendedor. Vermelho = não tratada." position="right" />
             </h3>
             {objectionsList.length > 0 ? (
               <div className="space-y-2">
@@ -624,33 +644,12 @@ function ConversationDetail() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-gray-400 text-center py-4">
-                {analysis ? 'Nenhuma objeção identificada' : 'Sem análise disponível'}
-              </p>
-            )}
-          </div>
-
-          {/* Palavras-chave */}
-          <div className="card">
-            <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
-              <Tag className="w-4 h-4 text-mave-500" />
-              Palavras-chave
-            </h3>
-            {keywords.length > 0 ? (
-              <div className="flex flex-wrap gap-2">
-                {keywords.map((keyword, idx) => (
-                  <span
-                    key={idx}
-                    className="inline-block bg-mave-50 text-mave-700 text-xs font-medium px-2.5 py-1 rounded-full border border-mave-200 hover:bg-mave-100 transition-colors"
-                  >
-                    {keyword}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-sm text-gray-400 text-center py-4">
-                {analysis ? 'Nenhuma palavra-chave identificada' : 'Sem análise disponível'}
-              </p>
+              <EmptyState
+                icon={FileText}
+                title={analysis ? 'Nenhuma objeção identificada' : 'Aguardando análise'}
+                description={analysis ? 'A IA não encontrou objeções nesta conversa.' : 'Analise a conversa para ver objeções detectadas.'}
+                className="py-4"
+              />
             )}
           </div>
 
@@ -659,6 +658,7 @@ function ConversationDetail() {
             <h3 className="text-sm font-semibold text-gray-700 flex items-center gap-2 mb-3">
               <AlertTriangle className="w-4 h-4 text-orange-500" />
               Alertas
+              <HelpTooltip text="Alertas gerados automaticamente quando limites de tempo de resposta ou follow-up são ultrapassados." position="right" />
             </h3>
             {alerts.length > 0 ? (
               <div className="space-y-2">
@@ -682,8 +682,14 @@ function ConversationDetail() {
                 ))}
               </div>
             ) : (
-              <p className="text-sm text-gray-400 text-center py-4">Nenhum alerta</p>
+              <EmptyState
+                icon={AlertTriangle}
+                title="Nenhum alerta ativo"
+                description="Alertas aparecem quando limites configurados são ultrapassados."
+                className="py-4"
+              />
             )}
+          </div>
           </div>
         </div>
       </div>
