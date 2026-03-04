@@ -3,10 +3,10 @@ import csv
 from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import ExcludedNumber
+from app.models import ExcludedNumber, Conversation
 from app.schemas import ExclusionAddRequest, ExclusionBulkDeleteRequest, ExclusionClearRequest
 from app.auth import get_current_user
 from app.services.phone_normalizer import normalize_phone, is_valid_phone
@@ -72,7 +72,20 @@ async def add_excluded(body: ExclusionAddRequest, db: AsyncSession = Depends(get
         added += 1
 
     await db.flush()
-    return {"added": added, "skipped": skipped, "duplicates": duplicates, "invalid": invalid, "errors": errors}
+
+    # Mark matching conversations as excluded so they disappear immediately
+    added_phones = [normalize_phone(l.strip()) for l in lines if normalize_phone(l.strip())]
+    conversations_hidden = 0
+    if added_phones:
+        result = await db.execute(
+            sa_update(Conversation)
+            .where(Conversation.customer_phone.in_(added_phones))
+            .where(Conversation.status != "excluded")
+            .values(status="excluded")
+        )
+        conversations_hidden = result.rowcount
+
+    return {"added": added, "skipped": skipped, "duplicates": duplicates, "invalid": invalid, "errors": errors, "conversations_hidden": conversations_hidden}
 
 
 @router.delete("/{number_id}")

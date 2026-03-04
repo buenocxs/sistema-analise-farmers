@@ -4,6 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import async_session
 from app.models import Seller, Conversation, Message, ConversationAnalysis
 from app.services.ai_analyzer import analyze_conversation
+from app.services.query_filters import apply_conversation_exclusions
 from app.jobs.task_manager import update_task, complete_task, fail_task
 from datetime import datetime, timezone
 
@@ -14,12 +15,13 @@ async def analyze_seller_conversations(seller_id: int, task_id: str, force: bool
     """Analyze all conversations for a seller using AI."""
     try:
         async with async_session() as db:
-            # Get conversations for seller
+            # Get conversations for seller (exclude blocked + invalid phones)
             q = (
                 select(Conversation)
                 .where(Conversation.seller_id == seller_id)
                 .order_by(Conversation.last_message_at.desc())
             )
+            q = apply_conversation_exclusions(q)
             result = await db.execute(q)
             conversations = result.scalars().all()
 

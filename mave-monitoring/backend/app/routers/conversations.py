@@ -5,10 +5,11 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
-from app.models import Seller, Conversation, Message, ConversationAnalysis, ManagerNote, User
+from app.models import Seller, Conversation, Message, ConversationAnalysis, ManagerNote, User, ExcludedNumber
+from app.services.query_filters import apply_conversation_exclusions
 from app.auth import get_current_user
 from app.jobs.task_manager import create_task, run_background
 from app.jobs.sync_conversations import sync_seller_conversations
@@ -83,6 +84,10 @@ async def list_conversations(
     q = select(Conversation, Seller).join(Seller).order_by(Conversation.last_message_at.desc().nulls_last())
     count_q = select(func.count(Conversation.id)).join(Seller)
 
+    # Exclude blocked + invalid phones
+    q = apply_conversation_exclusions(q)
+    count_q = apply_conversation_exclusions(count_q)
+
     if search:
         pattern = f"%{search}%"
         filter_ = Conversation.customer_name.ilike(pattern) | Conversation.customer_phone.ilike(pattern)
@@ -143,6 +148,10 @@ async def export_conversations(
         .join(Seller)
         .order_by(Conversation.last_message_at.desc().nulls_last())
     )
+
+    # Exclude blocked + invalid phones
+    q = apply_conversation_exclusions(q)
+
     if seller_id:
         q = q.where(Conversation.seller_id == seller_id)
     if team:

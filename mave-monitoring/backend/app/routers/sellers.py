@@ -4,6 +4,7 @@ from sqlalchemy import select, func, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.models import Seller, Conversation, ConversationAnalysis, DailyMetric, Message
+from app.services.query_filters import apply_conversation_exclusions
 from app.schemas import SellerCreate, SellerUpdate
 from app.auth import get_current_user
 from app.services.phone_normalizer import normalize_phone
@@ -33,15 +34,17 @@ def _seller_base_dict(seller: Seller) -> dict:
 
 async def _seller_to_dict(db: AsyncSession, seller: Seller) -> dict:
     """Convert seller to dict with computed fields (single seller detail)."""
-    total_convs = (await db.execute(
-        select(func.count(Conversation.id)).where(Conversation.seller_id == seller.id)
-    )).scalar() or 0
+    q_count = select(func.count(Conversation.id)).where(Conversation.seller_id == seller.id)
+    q_count = apply_conversation_exclusions(q_count)
+    total_convs = (await db.execute(q_count)).scalar() or 0
 
-    avg_score = (await db.execute(
+    q_score = (
         select(func.avg(ConversationAnalysis.quality_score))
         .join(Conversation)
         .where(Conversation.seller_id == seller.id)
-    )).scalar()
+    )
+    q_score = apply_conversation_exclusions(q_score)
+    avg_score = (await db.execute(q_score)).scalar()
 
     avg_rt = (await db.execute(
         select(func.avg(DailyMetric.avg_response_time_seconds))
@@ -84,19 +87,23 @@ async def _batch_seller_stats(db: AsyncSession, seller_ids: list[int]) -> dict:
         return {}
 
     # 1) Total conversations per seller
-    conv_counts = dict((await db.execute(
+    q_conv = (
         select(Conversation.seller_id, func.count(Conversation.id))
         .where(Conversation.seller_id.in_(seller_ids))
         .group_by(Conversation.seller_id)
-    )).all())
+    )
+    q_conv = apply_conversation_exclusions(q_conv)
+    conv_counts = dict((await db.execute(q_conv)).all())
 
     # 2) Avg quality score per seller
-    avg_scores = dict((await db.execute(
+    q_scores = (
         select(Conversation.seller_id, func.avg(ConversationAnalysis.quality_score))
         .join(Conversation)
         .where(Conversation.seller_id.in_(seller_ids))
         .group_by(Conversation.seller_id)
-    )).all())
+    )
+    q_scores = apply_conversation_exclusions(q_scores)
+    avg_scores = dict((await db.execute(q_scores)).all())
 
     # 3) Avg response time per seller
     avg_rts = dict((await db.execute(
@@ -269,6 +276,10 @@ async def get_seller_conversations(
     q = select(Conversation).where(Conversation.seller_id == seller_id).order_by(Conversation.last_message_at.desc().nulls_last())
     count_q = select(func.count(Conversation.id)).where(Conversation.seller_id == seller_id)
 
+    # Exclude blocked + invalid phones
+    q = apply_conversation_exclusions(q)
+    count_q = apply_conversation_exclusions(count_q)
+
     if date_from:
         q = q.where(Conversation.started_at >= date_from)
         count_q = count_q.where(Conversation.started_at >= date_from)
@@ -325,9 +336,9 @@ async def analyze_seller(seller_id: int, force: bool = Query(False), db: AsyncSe
     seller = result.scalar_one_or_none()
     if not seller:
         raise HTTPException(status_code=404, detail="Vendedor não encontrado")
-    convs = (await db.execute(
-        select(func.count(Conversation.id)).where(Conversation.seller_id == seller_id)
-    )).scalar() or 0
+    q_convs = select(func.count(Conversation.id)).where(Conversation.seller_id == seller_id)
+    q_convs = apply_conversation_exclusions(q_convs)
+    convs = (await db.execute(q_convs)).scalar() or 0
     task_id = create_task(total=convs)
     run_background(analyze_seller_conversations(seller_id, task_id, force))
     return {"task_id": task_id, "total": convs}

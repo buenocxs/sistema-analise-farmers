@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import (
     Seller, Conversation, ConversationAnalysis, Message, DailyMetric, Alert
 )
+from app.services.query_filters import apply_conversation_exclusions
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,7 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
 
         # Total conversations
         q = select(func.count(Conversation.id)).join(Seller)
+        q = apply_conversation_exclusions(q)
         for f in seller_filter:
             q = q.where(f)
         if date_from:
@@ -40,6 +42,7 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
 
         # Avg quality score
         q_quality = select(func.avg(ConversationAnalysis.quality_score)).join(Conversation).join(Seller)
+        q_quality = apply_conversation_exclusions(q_quality)
         for f in seller_filter:
             q_quality = q_quality.where(f)
         avg_quality = (await db.execute(q_quality)).scalar()
@@ -59,6 +62,7 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
             .join(Conversation).join(Seller)
             .group_by(ConversationAnalysis.sentiment_label)
         )
+        q_sent = apply_conversation_exclusions(q_sent)
         for f in seller_filter:
             q_sent = q_sent.where(f)
         sent_rows = (await db.execute(q_sent)).all()
@@ -102,6 +106,7 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
             .join(Seller)
             .where(and_(Seller.team == team_name, Seller.is_active == True))
         )
+        q_convs = apply_conversation_exclusions(q_convs)
         if date_from:
             q_convs = q_convs.where(Conversation.started_at >= date_from)
         if date_to_exclusive:
@@ -113,6 +118,7 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
             .join(Conversation).join(Seller)
             .where(and_(Seller.team == team_name, Seller.is_active == True))
         )
+        q_msgs = apply_conversation_exclusions(q_msgs)
         msgs_total = (await db.execute(q_msgs)).scalar() or 0
 
         q_quality = (
@@ -120,6 +126,7 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
             .join(Conversation).join(Seller)
             .where(and_(Seller.team == team_name, Seller.is_active == True))
         )
+        q_quality = apply_conversation_exclusions(q_quality)
         avg_q = (await db.execute(q_quality)).scalar()
 
         q_rt = (
@@ -149,6 +156,7 @@ async def get_sentiment_distribution(db: AsyncSession, date_from: date | None = 
         .where(Seller.is_active == True)
         .group_by(ConversationAnalysis.sentiment_label)
     )
+    q = apply_conversation_exclusions(q)
     if team:
         q = q.where(Seller.team == team)
     if date_from:
@@ -199,6 +207,7 @@ async def get_heatmap(db: AsyncSession, date_from: date | None = None, date_to: 
         .where(Seller.is_active == True)
         .group_by("day_of_week", "hour")
     )
+    q = apply_conversation_exclusions(q)
     if team:
         q = q.where(Seller.team == team)
     if date_from:
@@ -224,6 +233,7 @@ async def get_ranking(db: AsyncSession, metric: str = "score", limit: int = 10, 
             .order_by(func.avg(ConversationAnalysis.quality_score).desc().nulls_last())
             .limit(limit)
         )
+        q = apply_conversation_exclusions(q)
     elif metric == "conversations":
         q = (
             select(
@@ -237,6 +247,7 @@ async def get_ranking(db: AsyncSession, metric: str = "score", limit: int = 10, 
             .order_by(func.count(Conversation.id).desc())
             .limit(limit)
         )
+        q = apply_conversation_exclusions(q)
     elif metric == "response_time":
         q = (
             select(
@@ -338,6 +349,7 @@ async def get_funnel_data(db: AsyncSession, date_from: date | None = None, date_
         .where(and_(Seller.is_active == True, ConversationAnalysis.stage.isnot(None)))
         .group_by(ConversationAnalysis.stage)
     )
+    q = apply_conversation_exclusions(q)
     if team:
         q = q.where(Seller.team == team)
     if seller_id:
