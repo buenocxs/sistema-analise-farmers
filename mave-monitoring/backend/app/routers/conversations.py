@@ -371,11 +371,14 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
     messages into that one and delete the @lid conversation.
     """
     from sqlalchemy import delete as sa_delete, update as sa_update
+    from sqlalchemy.orm import noload
     from app.services.phone_normalizer import is_valid_br_phone
 
-    # Get all conversations
+    # Get all conversations (disable relationship loading to avoid huge queries)
     result = await db.execute(
-        select(Conversation).order_by(Conversation.seller_id, Conversation.customer_phone)
+        select(Conversation)
+        .options(noload("*"))
+        .order_by(Conversation.seller_id, Conversation.customer_phone)
     )
     all_convs = list(result.scalars().all())
 
