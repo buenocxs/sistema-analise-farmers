@@ -354,19 +354,6 @@ async def recalculate_metrics(seller_id: int, days: int = Query(30), db: AsyncSe
     return {"task_id": task_id}
 
 
-@router.get("/{seller_id}/webhooks")
-async def get_seller_webhooks(seller_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
-    """Check current Z-API webhook configuration for a seller."""
-    result = await db.execute(select(Seller).where(Seller.id == seller_id))
-    seller = result.scalar_one_or_none()
-    if not seller or not seller.zapi_instance_id or not seller.zapi_instance_token:
-        raise HTTPException(status_code=404, detail="Vendedor sem credenciais Z-API")
-    from app.services.zapi_client import ZAPIClient
-    client = ZAPIClient(seller.zapi_instance_id, seller.zapi_instance_token)
-    webhooks = await client.get_webhooks()
-    return {"seller_id": seller_id, "webhooks": webhooks}
-
-
 @router.post("/{seller_id}/setup-webhooks")
 async def setup_seller_webhooks(seller_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
     """Configure Z-API webhook URLs for a seller (received + sent messages)."""
@@ -377,15 +364,14 @@ async def setup_seller_webhooks(seller_id: int, db: AsyncSession = Depends(get_d
     from app.services.zapi_client import ZAPIClient
     from app.config import get_settings
     settings = get_settings()
-    # Build webhook URL based on APP_ENV
     if settings.APP_ENV == "production":
         base_url = "https://sistema-analise-farmers-production.up.railway.app"
     else:
         base_url = "http://localhost:8002"
     webhook_url = f"{base_url}/api/webhook/zapi/{seller_id}"
     client = ZAPIClient(seller.zapi_instance_id, seller.zapi_instance_token)
-    result = await client.set_webhook(webhook_url)
-    return {"seller_id": seller_id, "webhook_url": webhook_url, "result": result}
+    results = await client.setup_all_webhooks(webhook_url)
+    return {"seller_id": seller_id, "webhook_url": webhook_url, "results": results}
 
 
 async def _recalculate_metrics(seller_id: int, task_id: str, days: int):

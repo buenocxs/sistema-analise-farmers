@@ -66,24 +66,34 @@ class ZAPIClient:
             logger.error(f"Failed to get contacts: {e}")
             return []
 
-    async def get_webhooks(self) -> dict:
-        """Get current webhook configuration."""
+    async def set_webhook_received(self, webhook_url: str) -> dict | None:
+        """Set webhook for received messages (including 'sent by me' via received-delivery)."""
         try:
-            result = await self._request("GET", "webhooks")
-            return result if isinstance(result, dict) else {}
+            return await self._request("PUT", "update-webhook-received-delivery", json={"value": webhook_url})
         except Exception as e:
-            logger.error(f"Failed to get webhooks: {e}")
-            return {}
-
-    async def set_webhook(self, webhook_url: str) -> dict | None:
-        """Set webhook URL for ALL events (received, send, status, etc)."""
-        try:
-            payload = {
-                "receivedMessage": {"webhookUrl": webhook_url},
-                "sentMessage": {"webhookUrl": webhook_url},
-                "messageStatus": {"webhookUrl": webhook_url},
-            }
-            return await self._request("PUT", "webhooks", json=payload)
-        except Exception as e:
-            logger.error(f"Failed to set webhooks: {e}")
+            logger.error(f"Failed to set received webhook: {e}")
             return None
+
+    async def set_webhook_delivery(self, webhook_url: str) -> dict | None:
+        """Set webhook for sent/delivery notifications."""
+        try:
+            return await self._request("PUT", "update-webhook-delivery", json={"value": webhook_url})
+        except Exception as e:
+            logger.error(f"Failed to set delivery webhook: {e}")
+            return None
+
+    async def set_webhook_message_status(self, webhook_url: str) -> dict | None:
+        """Set webhook for message status changes."""
+        try:
+            return await self._request("PUT", "update-webhook-message-status", json={"value": webhook_url})
+        except Exception as e:
+            logger.error(f"Failed to set message-status webhook: {e}")
+            return None
+
+    async def setup_all_webhooks(self, webhook_url: str) -> dict:
+        """Configure all webhook types to the same URL."""
+        results = {}
+        results["received"] = await self.set_webhook_received(webhook_url)
+        results["delivery"] = await self.set_webhook_delivery(webhook_url)
+        results["message_status"] = await self.set_webhook_message_status(webhook_url)
+        return results
