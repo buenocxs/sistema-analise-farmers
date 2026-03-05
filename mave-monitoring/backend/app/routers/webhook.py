@@ -146,23 +146,50 @@ async def _process_webhook(seller_id: int, payload: dict):
 
             from_me = payload.get("fromMe", False)
 
-            # Extract customer phone.
+            # Skip status callbacks (delivery/read receipts, not real messages)
+            msg_type = payload.get("type", "")
+            if msg_type == "MessageStatusCallback":
+                return
+
+            # Extract customer phone and @lid.
+            # Z-API payload formats:
+            #   Incoming (customer→seller): chatId="5511999@c.us", phone="5511999"
+            #   Outgoing via chatId:        chatId="12345@lid", phone="5511999" or phone="12345@lid"
+            #   Outgoing via notifySentByMe: chatId="", phone="12345@lid" or phone="5511999",
+            #                                chatLid="12345@lid", connectedPhone="seller_phone"
             chat_id = payload.get("chatId", "")
+            chat_lid = payload.get("chatLid", "")
+            phone_raw = payload.get("phone", "")
             lid_id = ""
 
+            # Extract lid_id from chatId, chatLid, or phone field
             if chat_id and "@lid" in chat_id:
                 lid_id = chat_id.split("@")[0]
-                phone = payload.get("phone", "")
-            elif chat_id:
-                phone = chat_id.split("@")[0]
-            else:
-                phone = payload.get("phone", "")
+            if not lid_id and chat_lid and "@lid" in chat_lid:
+                lid_id = chat_lid.split("@")[0]
+            if not lid_id and "@lid" in phone_raw:
+                lid_id = phone_raw.split("@")[0]
 
-            # Safety check: if phone matches seller's own phone, skip
+            # Extract real phone — try chatId first, then phone field
+            if chat_id and "@lid" not in chat_id and "@" in chat_id:
+                phone = chat_id.split("@")[0]
+            elif phone_raw and "@lid" not in phone_raw:
+                phone = phone_raw
+            else:
+                phone = ""
+
+            # Safety check: if phone is the seller's own number, it's a self-note
+            # For fromMe messages, the "phone" field sometimes is the seller's number
+            # but the chatLid tells us which customer they're writing to
             normalized = normalize_phone(phone)
             seller_norm = normalize_phone(seller.phone or "")
             if normalized and normalized == seller_norm:
-                return
+                # Seller sending to themselves (self-note/cotação) — skip
+                # UNLESS we have a lid_id pointing to a customer conversation
+                if lid_id:
+                    normalized = ""  # Use lid_id matching instead
+                else:
+                    return
 
             if not normalized and not lid_id:
                 return
