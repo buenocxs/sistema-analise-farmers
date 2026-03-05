@@ -298,6 +298,219 @@ async def sync_conversations(seller_id: int, days: int = Query(7), db: AsyncSess
     return {"task_id": task_id, "total": 0}
 
 
+@router.post("/{conversation_id}/pull-messages")
+async def pull_messages_from_zapi(conversation_id: int, amount: int = Query(50, ge=1, le=200), db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    """Pull messages from Z-API for a specific conversation (backfill missing messages)."""
+    from datetime import datetime, timezone
+    from app.services.zapi_client import ZAPIClient
+    from app.services.phone_normalizer import normalize_phone
+
+    result = await db.execute(
+        select(Conversation, Seller)
+        .join(Seller)
+        .where(Conversation.id == conversation_id)
+    )
+    row = result.first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Conversa não encontrada")
+    conv, seller = row[0], row[1]
+
+    if not seller.zapi_instance_id or not seller.zapi_instance_token:
+        raise HTTPException(status_code=400, detail="Vendedor sem credenciais Z-API")
+
+    phone = conv.customer_phone
+    if not phone or not phone.startswith("55"):
+        raise HTTPException(status_code=400, detail="Conversa sem telefone válido para buscar mensagens")
+
+    client = ZAPIClient(seller.zapi_instance_id, seller.zapi_instance_token)
+    raw_msgs = await client.get_chat_messages(phone, amount=amount)
+
+    if not raw_msgs:
+        return {"pulled": 0, "skipped": 0, "total_from_zapi": 0}
+
+    # Get existing message IDs to avoid duplicates
+    existing_ids_result = await db.execute(
+        select(Message.zapi_message_id).where(Message.conversation_id == conv.id)
+    )
+    existing_ids = {r[0] for r in existing_ids_result.all() if r[0]}
+
+    pulled = 0
+    skipped = 0
+    seller_norm = normalize_phone(seller.phone or "")
+
+    for raw in raw_msgs:
+        msg_id = raw.get("messageId") or raw.get("id")
+        if msg_id and msg_id in existing_ids:
+            skipped += 1
+            continue
+
+        from_me = raw.get("fromMe", False)
+
+        # Parse content
+        content = ""
+        text_data = raw.get("text")
+        if isinstance(text_data, dict):
+            content = text_data.get("message", "")
+        elif isinstance(text_data, str):
+            content = text_data
+        else:
+            content = raw.get("body", "")
+
+        if not content and not raw.get("type"):
+            skipped += 1
+            continue
+
+        # Parse timestamp
+        moment = raw.get("moment") or raw.get("timestamp")
+        if isinstance(moment, (int, float)):
+            if moment > 1e12:
+                moment = moment / 1000
+            ts = datetime.fromtimestamp(moment, tz=timezone.utc)
+        else:
+            ts = datetime.now(timezone.utc)
+
+        msg = Message(
+            conversation_id=conv.id,
+            zapi_message_id=msg_id,
+            sender_type="seller" if from_me else "customer",
+            sender_name=seller.name if from_me else conv.customer_name,
+            content=content,
+            message_type=raw.get("type", "text") or "text",
+            timestamp=ts,
+            from_me=from_me,
+        )
+        db.add(msg)
+        pulled += 1
+        if msg_id:
+            existing_ids.add(msg_id)
+
+    if pulled:
+        # Update conversation metadata
+        conv.message_count = (conv.message_count or 0) + pulled
+        await db.commit()
+
+    return {"pulled": pulled, "skipped": skipped, "total_from_zapi": len(raw_msgs)}
+
+
+@router.post("/bulk-pull-messages/{seller_id}")
+async def bulk_pull_messages(seller_id: int, db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    """Pull messages from Z-API for all conversations that have zero seller messages."""
+    import asyncio
+    from datetime import datetime, timezone
+    from app.services.zapi_client import ZAPIClient
+    from app.services.phone_normalizer import normalize_phone
+
+    result = await db.execute(select(Seller).where(Seller.id == seller_id))
+    seller = result.scalar_one_or_none()
+    if not seller or not seller.zapi_instance_id or not seller.zapi_instance_token:
+        raise HTTPException(status_code=404, detail="Vendedor sem credenciais Z-API")
+
+    # Find conversations with 0 seller messages
+    seller_msg_count = (
+        select(Message.conversation_id, func.count(Message.id).label("cnt"))
+        .where(Message.from_me == True)
+        .group_by(Message.conversation_id)
+        .subquery()
+    )
+    q = (
+        select(Conversation)
+        .outerjoin(seller_msg_count, Conversation.id == seller_msg_count.c.conversation_id)
+        .where(Conversation.seller_id == seller_id)
+        .where(Conversation.customer_phone.like("55%"))
+        .where(func.length(Conversation.customer_phone) <= 13)
+        .where((seller_msg_count.c.cnt == None) | (seller_msg_count.c.cnt == 0))
+    )
+    convs = (await db.execute(q)).scalars().all()
+
+    if not convs:
+        return {"message": "No conversations missing seller messages", "total": 0}
+
+    client = ZAPIClient(seller.zapi_instance_id, seller.zapi_instance_token)
+    seller_norm = normalize_phone(seller.phone or "")
+    total_pulled = 0
+    total_skipped = 0
+    convs_updated = 0
+
+    for conv in convs:
+        try:
+            raw_msgs = await client.get_chat_messages(conv.customer_phone, amount=50)
+            if not raw_msgs:
+                continue
+
+            # Get existing message IDs
+            existing_ids_result = await db.execute(
+                select(Message.zapi_message_id).where(Message.conversation_id == conv.id)
+            )
+            existing_ids = {r[0] for r in existing_ids_result.all() if r[0]}
+
+            pulled = 0
+            for raw in raw_msgs:
+                msg_id = raw.get("messageId") or raw.get("id")
+                if msg_id and msg_id in existing_ids:
+                    total_skipped += 1
+                    continue
+
+                from_me = raw.get("fromMe", False)
+                content = ""
+                text_data = raw.get("text")
+                if isinstance(text_data, dict):
+                    content = text_data.get("message", "")
+                elif isinstance(text_data, str):
+                    content = text_data
+                else:
+                    content = raw.get("body", "")
+
+                if not content and not raw.get("type"):
+                    total_skipped += 1
+                    continue
+
+                moment = raw.get("moment") or raw.get("timestamp")
+                if isinstance(moment, (int, float)):
+                    if moment > 1e12:
+                        moment = moment / 1000
+                    ts = datetime.fromtimestamp(moment, tz=timezone.utc)
+                else:
+                    ts = datetime.now(timezone.utc)
+
+                msg = Message(
+                    conversation_id=conv.id,
+                    zapi_message_id=msg_id,
+                    sender_type="seller" if from_me else "customer",
+                    sender_name=seller.name if from_me else conv.customer_name,
+                    content=content,
+                    message_type=raw.get("type", "text") or "text",
+                    timestamp=ts,
+                    from_me=from_me,
+                )
+                db.add(msg)
+                pulled += 1
+                if msg_id:
+                    existing_ids.add(msg_id)
+
+            if pulled:
+                conv.message_count = (conv.message_count or 0) + pulled
+                total_pulled += pulled
+                convs_updated += 1
+
+            # Rate limit: small delay between API calls
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).error(f"Error pulling messages for conv {conv.id}: {e}")
+            continue
+
+    if total_pulled:
+        await db.commit()
+
+    return {
+        "conversations_checked": len(convs),
+        "conversations_updated": convs_updated,
+        "messages_pulled": total_pulled,
+        "messages_skipped": total_skipped,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Manager Notes
 # ---------------------------------------------------------------------------
