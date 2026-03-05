@@ -65,3 +65,25 @@ class ZAPIClient:
         except Exception as e:
             logger.error(f"Failed to get contacts: {e}")
             return []
+
+    async def get_webhooks(self) -> dict:
+        """Get current webhook configuration."""
+        try:
+            result = await self._request("GET", "webhooks")
+            return result if isinstance(result, dict) else {}
+        except Exception as e:
+            logger.error(f"Failed to get webhooks: {e}")
+            return {}
+
+    async def set_webhook(self, webhook_url: str) -> dict | None:
+        """Set webhook URL for ALL events (received, send, status, etc)."""
+        try:
+            payload = {
+                "receivedMessage": {"webhookUrl": webhook_url},
+                "sentMessage": {"webhookUrl": webhook_url},
+                "messageStatus": {"webhookUrl": webhook_url},
+            }
+            return await self._request("PUT", "webhooks", json=payload)
+        except Exception as e:
+            logger.error(f"Failed to set webhooks: {e}")
+            return None
