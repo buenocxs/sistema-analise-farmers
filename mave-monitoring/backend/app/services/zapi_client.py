@@ -90,10 +90,19 @@ class ZAPIClient:
             logger.error(f"Failed to set message-status webhook: {e}")
             return None
 
+    async def enable_notify_sent_by_me(self) -> dict | None:
+        """Enable webhook notifications for messages sent by the seller."""
+        try:
+            return await self._request("PUT", "update-notify-sent-by-me", json={"notifySentByMe": True})
+        except Exception as e:
+            logger.error(f"Failed to enable notifySentByMe: {e}")
+            return None
+
     async def setup_all_webhooks(self, webhook_url: str) -> dict:
-        """Configure all webhook types to the same URL."""
+        """Configure all webhook types to the same URL + enable sent-by-me."""
         results = {}
         results["received"] = await self.set_webhook_received(webhook_url)
         results["delivery"] = await self.set_webhook_delivery(webhook_url)
         results["message_status"] = await self.set_webhook_message_status(webhook_url)
+        results["notify_sent_by_me"] = await self.enable_notify_sent_by_me()
         return results
