@@ -67,11 +67,19 @@ class ZAPIClient:
             return []
 
     async def set_webhook_received(self, webhook_url: str) -> dict | None:
-        """Set webhook for received messages (including 'sent by me' via received-delivery)."""
+        """Set webhook for received messages (basic received endpoint)."""
+        try:
+            return await self._request("PUT", "update-webhook-received", json={"value": webhook_url})
+        except Exception as e:
+            logger.error(f"Failed to set received webhook: {e}")
+            return None
+
+    async def set_webhook_received_delivery(self, webhook_url: str) -> dict | None:
+        """Set webhook for received messages with delivery info."""
         try:
             return await self._request("PUT", "update-webhook-received-delivery", json={"value": webhook_url})
         except Exception as e:
-            logger.error(f"Failed to set received webhook: {e}")
+            logger.error(f"Failed to set received-delivery webhook: {e}")
             return None
 
     async def set_webhook_delivery(self, webhook_url: str) -> dict | None:
@@ -102,6 +110,7 @@ class ZAPIClient:
         """Configure all webhook types to the same URL + enable sent-by-me."""
         results = {}
         results["received"] = await self.set_webhook_received(webhook_url)
+        results["received_delivery"] = await self.set_webhook_received_delivery(webhook_url)
         results["delivery"] = await self.set_webhook_delivery(webhook_url)
         results["message_status"] = await self.set_webhook_message_status(webhook_url)
         results["notify_sent_by_me"] = await self.enable_notify_sent_by_me()
