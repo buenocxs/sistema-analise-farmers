@@ -81,20 +81,45 @@ async def _process_webhook(seller_id: int, payload: dict):
                 )
                 conv = conv_result.scalar_one_or_none()
 
-            # If no match by phone and we have a @lid, try matching by lid
+            # If no match by phone and we have a @lid, try smarter matching
             if not conv and lid_id:
+                # First check if there's already an @lid conversation
                 conv_result = await db.execute(
                     select(Conversation).where(and_(
                         Conversation.seller_id == seller.id,
                         Conversation.customer_phone == lid_id,
                     ))
                 )
-                conv = conv_result.scalar_one_or_none()
-                # If found by lid and we now have a real phone, update it
-                if conv and normalized:
-                    logger.info(f"Webhook: upgrading @lid conv {conv.id} phone {conv.customer_phone} -> {normalized}")
-                    conv.customer_phone = normalized
-                    conv.zapi_chat_id = normalized
+                lid_conv = conv_result.scalar_one_or_none()
+
+                # For outgoing messages (@lid + from_me), try to find the real
+                # phone conversation the seller is replying to.
+                # Z-API sends chatName with the customer name — use it to match.
+                if from_me:
+                    chat_name = (payload.get("chatName") or "").strip()
+                    if chat_name:
+                        name_result = await db.execute(
+                            select(Conversation).where(and_(
+                                Conversation.seller_id == seller.id,
+                                Conversation.customer_name == chat_name,
+                                Conversation.customer_phone.like("55%"),
+                            )).order_by(Conversation.last_message_at.desc().nulls_last()).limit(1)
+                        )
+                        real_by_name = name_result.scalar_one_or_none()
+                        if real_by_name:
+                            conv = real_by_name
+                            # If there's also an orphan @lid conv, upgrade it
+                            if lid_conv and normalized:
+                                lid_conv.customer_phone = normalized
+                                lid_conv.zapi_chat_id = normalized
+
+                if not conv:
+                    conv = lid_conv
+                    # If found by lid and we now have a real phone, update it
+                    if conv and normalized:
+                        logger.info(f"Webhook: upgrading @lid conv {conv.id} phone {conv.customer_phone} -> {normalized}")
+                        conv.customer_phone = normalized
+                        conv.zapi_chat_id = normalized
 
             if not conv:
                 # When seller sends first message (fromMe=true), senderName is the
