@@ -585,67 +585,66 @@ async def delete_note(conversation_id: int, note_id: int, db: AsyncSession = Dep
 
 @router.post("/merge-duplicates")
 async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
-    """Merge @lid conversations (seller-only messages) into real phone conversations.
+    """Merge @lid conversations into real phone conversations.
 
-    Z-API sends outgoing messages (from_me=True) with @lid chatIds and incoming
-    messages (from_me=False) with real phone chatIds.  This splits conversations
-    in two: the real-phone half has only customer messages and the @lid half has
-    only seller messages.
-
-    Matching strategy (per seller):
-    1. Name match — @lid conv name matches real conv name
-    2. Time overlap — @lid conv has seller messages whose timestamps interleave
-       with customer messages in a real phone conversation
+    Uses name matching + time overlap. Also populates lid_id on merged conversations.
     """
     from sqlalchemy import delete as sa_delete, update as sa_update
     from sqlalchemy.orm import noload
     from app.services.phone_normalizer import is_valid_br_phone
     from collections import defaultdict
 
-    # Get all conversations (disable eager loading)
+    # Only load @lid conversations (not starting with "55" or longer than 13 chars)
     result = await db.execute(
-        select(Conversation)
-        .options(noload("*"))
-        .order_by(Conversation.seller_id, Conversation.customer_phone)
+        select(Conversation).options(noload("*"))
+        .where(~Conversation.customer_phone.like("55%"))
     )
-    all_convs = list(result.scalars().all())
+    lid_convs = list(result.scalars().all())
 
-    # Separate into real-phone and lid conversations per seller
+    if not lid_convs:
+        return {"merged": 0, "deleted_empty": 0, "lid_total": 0}
+
+    # Get affected seller IDs
+    seller_ids = {c.seller_id for c in lid_convs}
+
+    # Load real-phone conversations only for those sellers
+    result = await db.execute(
+        select(Conversation).options(noload("*"))
+        .where(Conversation.seller_id.in_(seller_ids))
+        .where(Conversation.customer_phone.like("55%"))
+        .where(func.length(Conversation.customer_phone) <= 13)
+    )
+    real_convs = list(result.scalars().all())
     by_seller_real = defaultdict(list)
-    lid_convs = []
+    for c in real_convs:
+        by_seller_real[c.seller_id].append(c)
 
-    for conv in all_convs:
-        if is_valid_br_phone(conv.customer_phone or ""):
-            by_seller_real[conv.seller_id].append(conv)
-        else:
-            lid_convs.append(conv)
-
-    # Pre-fetch message time ranges for @lid and real conversations that need matching
+    # Get message stats only for @lid conversations and their candidate real convs
     lid_ids = [c.id for c in lid_convs]
-    real_ids = []
-    for convs in by_seller_real.values():
-        real_ids.extend(c.id for c in convs)
+    real_ids = [c.id for c in real_convs]
+    all_ids = lid_ids + real_ids
 
-    # Get min/max timestamps + from_me breakdown per conversation
     conv_stats = {}
-    if lid_ids or real_ids:
-        all_ids = lid_ids + real_ids
-        stats_q = await db.execute(
-            select(
-                Message.conversation_id,
-                func.min(Message.timestamp),
-                func.max(Message.timestamp),
-                func.count(Message.id).filter(Message.from_me == True),
-                func.count(Message.id).filter(Message.from_me == False),
+    if all_ids:
+        # Batch in chunks of 500 to avoid huge IN clause
+        for i in range(0, len(all_ids), 500):
+            chunk = all_ids[i:i+500]
+            stats_q = await db.execute(
+                select(
+                    Message.conversation_id,
+                    func.min(Message.timestamp),
+                    func.max(Message.timestamp),
+                    func.count(Message.id).filter(Message.from_me == True),
+                    func.count(Message.id).filter(Message.from_me == False),
+                )
+                .where(Message.conversation_id.in_(chunk))
+                .group_by(Message.conversation_id)
             )
-            .where(Message.conversation_id.in_(all_ids))
-            .group_by(Message.conversation_id)
-        )
-        for row in stats_q.all():
-            conv_stats[row[0]] = {
-                "min_ts": row[1], "max_ts": row[2],
-                "seller_msgs": row[3], "customer_msgs": row[4],
-            }
+            for row in stats_q.all():
+                conv_stats[row[0]] = {
+                    "min_ts": row[1], "max_ts": row[2],
+                    "seller_msgs": row[3], "customer_msgs": row[4],
+                }
 
     merged = 0
     deleted_empty = 0
@@ -653,7 +652,6 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
     for lid_conv in lid_convs:
         lid_stat = conv_stats.get(lid_conv.id)
 
-        # If @lid has no messages, delete it
         if not lid_stat or (lid_stat["seller_msgs"] == 0 and lid_stat["customer_msgs"] == 0):
             await db.execute(sa_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == lid_conv.id))
             await db.execute(sa_delete(ManagerNote).where(ManagerNote.conversation_id == lid_conv.id))
@@ -661,33 +659,28 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
             deleted_empty += 1
             continue
 
-        # Try to match with a real phone conversation
         real_match = None
         lid_name = (lid_conv.customer_name or "").strip().lower()
-
         candidates = by_seller_real.get(lid_conv.seller_id, [])
 
-        # Strategy 1: name match
+        # Strategy 1: name match (case-insensitive)
         for real_conv in candidates:
             real_name = (real_conv.customer_name or "").strip().lower()
-            if lid_name and real_name and lid_name == real_name and "@lid" not in lid_name:
+            if lid_name and real_name and lid_name == real_name:
                 real_match = real_conv
                 break
 
-        # Strategy 2: time overlap — @lid has only seller msgs, real has customer msgs
-        # that overlap in time (within the same time period)
+        # Strategy 2: time overlap
         if not real_match and lid_stat and lid_stat["seller_msgs"] > 0:
             best_score = -1
             for real_conv in candidates:
                 real_stat = conv_stats.get(real_conv.id)
                 if not real_stat or real_stat["customer_msgs"] == 0:
                     continue
-                # Check if time ranges overlap
                 if lid_stat["min_ts"] and real_stat["min_ts"] and lid_stat["max_ts"] and real_stat["max_ts"]:
                     overlap_start = max(lid_stat["min_ts"], real_stat["min_ts"])
                     overlap_end = min(lid_stat["max_ts"], real_stat["max_ts"])
                     if overlap_start <= overlap_end:
-                        # Score by overlap duration + number of messages
                         overlap_seconds = (overlap_end - overlap_start).total_seconds()
                         score = overlap_seconds + real_stat["customer_msgs"] * 100
                         if score > best_score:
@@ -695,26 +688,21 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
                             real_match = real_conv
 
         if real_match:
-            # Merge: move messages from @lid conv to real conv
             await db.execute(
-                sa_update(Message)
-                .where(Message.conversation_id == lid_conv.id)
+                sa_update(Message).where(Message.conversation_id == lid_conv.id)
                 .values(conversation_id=real_match.id)
             )
             await db.execute(
-                sa_update(ManagerNote)
-                .where(ManagerNote.conversation_id == lid_conv.id)
+                sa_update(ManagerNote).where(ManagerNote.conversation_id == lid_conv.id)
                 .values(conversation_id=real_match.id)
             )
             await db.execute(
                 sa_delete(ConversationAnalysis).where(ConversationAnalysis.conversation_id == lid_conv.id)
             )
-            # Update message_count
             msg_count = (await db.execute(
                 select(func.count(Message.id)).where(Message.conversation_id == real_match.id)
             )).scalar() or 0
             real_match.message_count = msg_count
-            # Update last_message_at
             ts = (await db.execute(
                 select(func.max(Message.timestamp)).where(Message.conversation_id == real_match.id)
             )).scalar()
@@ -724,22 +712,13 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
             lid_phone = lid_conv.customer_phone or ""
             if not lid_phone.startswith("55") and lid_phone:
                 real_match.lid_id = lid_phone
-            # Update customer name from real conv if @lid had a better name
-            if lid_name and "@lid" not in lid_name and (
-                not real_match.customer_name
-                or real_match.customer_name == real_match.customer_phone
-            ):
+            if lid_name and (not real_match.customer_name or real_match.customer_name == real_match.customer_phone):
                 real_match.customer_name = lid_conv.customer_name
             await db.delete(lid_conv)
             merged += 1
 
     await db.commit()
-    return {
-        "merged": merged,
-        "deleted_empty": deleted_empty,
-        "lid_total": len(lid_convs),
-        "real_total": sum(len(v) for v in by_seller_real.values()),
-    }
+    return {"merged": merged, "deleted_empty": deleted_empty, "lid_total": len(lid_convs)}
 
 
 @router.post("/redistribute-seller-messages")
