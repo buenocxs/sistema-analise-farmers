@@ -14,6 +14,10 @@ router = APIRouter(prefix="/webhook", tags=["webhook"])
 # Survives as long as the process is alive; rebuilt from DB on cache miss.
 _lid_cache: dict[tuple[int, str], str] = {}
 
+# Debug buffer: stores last N webhook payloads for diagnostics
+from collections import deque
+_debug_payloads: deque = deque(maxlen=50)
+
 
 def _cache_lid(seller_id: int, lid_id: str, phone: str):
     """Store @lid → real phone mapping in memory."""
@@ -261,5 +265,27 @@ async def zapi_webhook(seller_id: int, request: Request):
     except Exception:
         payload = {}
 
+    # Store for debug inspection
+    _debug_payloads.append({
+        "seller_id": seller_id,
+        "fromMe": payload.get("fromMe"),
+        "chatId": payload.get("chatId", "")[:30],
+        "phone": payload.get("phone", ""),
+        "chatName": payload.get("chatName", "")[:30],
+        "type": payload.get("type", ""),
+        "text": str(payload.get("text", ""))[:50],
+        "ts": datetime.now(timezone.utc).isoformat()[:19],
+    })
+
     run_background(_process_webhook(seller_id, payload))
     return {"status": "ok"}
+
+
+@router.get("/debug/recent")
+async def debug_recent_payloads():
+    """Return last 50 webhook payloads for diagnostics."""
+    return {
+        "count": len(_debug_payloads),
+        "lid_cache_size": len(_lid_cache),
+        "payloads": list(_debug_payloads),
+    }
