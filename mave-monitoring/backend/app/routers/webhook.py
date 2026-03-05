@@ -265,20 +265,19 @@ async def zapi_webhook(seller_id: int, request: Request):
     except Exception:
         payload = {}
 
-    # Store for debug inspection (full payload keys + select values)
+    # Store for debug inspection
     _debug_payloads.append({
         "seller_id": seller_id,
-        "keys": list(payload.keys())[:20],
+        "keys": sorted(payload.keys()),
         "fromMe": payload.get("fromMe"),
-        "isFromMe": payload.get("isFromMe"),
-        "chatId": payload.get("chatId", "")[:30],
+        "chatId": payload.get("chatId", ""),
+        "chatLid": payload.get("chatLid", ""),
         "phone": payload.get("phone", ""),
         "chatName": payload.get("chatName", "")[:30],
         "senderName": payload.get("senderName", "")[:30],
+        "connectedPhone": payload.get("connectedPhone", ""),
         "type": payload.get("type", ""),
         "text": str(payload.get("text", ""))[:80],
-        "messageId": payload.get("messageId", "")[:20],
-        "isGroup": payload.get("isGroup"),
         "ts": datetime.now(timezone.utc).isoformat()[:19],
     })
 
