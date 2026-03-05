@@ -134,12 +134,18 @@ async def _process_webhook(seller_id: int, payload: dict):
     """Process webhook payload in background."""
     try:
         async with async_session() as db:
-            # Get seller
+            # Get seller — try by ID first, then by connectedPhone
             result = await db.execute(select(Seller).where(Seller.id == seller_id))
             seller = result.scalar_one_or_none()
             if not seller:
-                logger.warning(f"Webhook: seller {seller_id} not found")
-                return
+                connected = normalize_phone(payload.get("connectedPhone", ""))
+                if connected:
+                    result = await db.execute(select(Seller).where(Seller.phone == connected))
+                    seller = result.scalar_one_or_none()
+                if not seller:
+                    logger.warning(f"Webhook: seller {seller_id} not found")
+                    return
+                logger.info(f"Webhook: seller_id={seller_id} not found, resolved by connectedPhone to seller {seller.id}")
 
             is_group = payload.get("isGroup", False)
             if is_group:
@@ -158,9 +164,9 @@ async def _process_webhook(seller_id: int, payload: dict):
             #   Outgoing via chatId:        chatId="12345@lid", phone="5511999" or phone="12345@lid"
             #   Outgoing via notifySentByMe: chatId="", phone="12345@lid" or phone="5511999",
             #                                chatLid="12345@lid", connectedPhone="seller_phone"
-            chat_id = payload.get("chatId", "")
-            chat_lid = payload.get("chatLid", "")
-            phone_raw = payload.get("phone", "")
+            chat_id = payload.get("chatId") or ""
+            chat_lid = payload.get("chatLid") or ""
+            phone_raw = payload.get("phone") or ""
             lid_id = ""
 
             # Extract lid_id from chatId, chatLid, or phone field
