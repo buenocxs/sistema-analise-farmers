@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Request
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from app.database import async_session
 from app.models import Seller, Conversation, Message, ExcludedNumber
 from app.services.phone_normalizer import normalize_phone
@@ -9,6 +9,120 @@ from app.jobs.task_manager import run_background
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/webhook", tags=["webhook"])
+
+# In-memory cache: (seller_id, lid_id) -> customer_phone
+# Survives as long as the process is alive; rebuilt from DB on cache miss.
+_lid_cache: dict[tuple[int, str], str] = {}
+
+
+def _cache_lid(seller_id: int, lid_id: str, phone: str):
+    """Store @lid → real phone mapping in memory."""
+    if lid_id and phone and phone.startswith("55"):
+        _lid_cache[(seller_id, lid_id)] = phone
+
+
+def _resolve_lid(seller_id: int, lid_id: str) -> str:
+    """Look up cached real phone for a @lid ID."""
+    return _lid_cache.get((seller_id, lid_id), "")
+
+
+async def _find_conversation(db, seller_id: int, normalized: str, lid_id: str, from_me: bool, payload: dict):
+    """Find the correct conversation for this message.
+
+    Strategy (in order):
+    1. By real phone (customer_phone) — works for all incoming messages
+    2. By lid_id column — works for @lid messages after first match
+    3. By in-memory cache (lid → phone) — fast fallback
+    4. By chatName matching — first-time @lid resolution
+    """
+    conv = None
+
+    # 1. Direct lookup by real phone
+    if normalized:
+        result = await db.execute(
+            select(Conversation).where(and_(
+                Conversation.seller_id == seller_id,
+                Conversation.customer_phone == normalized,
+            ))
+        )
+        conv = result.scalar_one_or_none()
+        if conv:
+            # If we also have a lid_id, store the mapping for future lookups
+            if lid_id and not conv.lid_id:
+                conv.lid_id = lid_id
+                _cache_lid(seller_id, lid_id, normalized)
+            return conv
+
+    # 2. Direct lookup by lid_id column (persistent mapping)
+    if lid_id:
+        result = await db.execute(
+            select(Conversation).where(and_(
+                Conversation.seller_id == seller_id,
+                Conversation.lid_id == lid_id,
+            ))
+        )
+        conv = result.scalar_one_or_none()
+        if conv:
+            _cache_lid(seller_id, lid_id, conv.customer_phone)
+            return conv
+
+    # 3. In-memory cache: resolve lid_id → phone, then lookup by phone
+    if lid_id:
+        cached_phone = _resolve_lid(seller_id, lid_id)
+        if cached_phone:
+            result = await db.execute(
+                select(Conversation).where(and_(
+                    Conversation.seller_id == seller_id,
+                    Conversation.customer_phone == cached_phone,
+                ))
+            )
+            conv = result.scalar_one_or_none()
+            if conv:
+                if not conv.lid_id:
+                    conv.lid_id = lid_id
+                return conv
+
+    # 4. chatName matching — find real-phone conversation by customer name
+    if lid_id:
+        chat_name = (payload.get("chatName") or "").strip()
+        if chat_name:
+            # Case-insensitive match against customer_name, only real-phone conversations
+            result = await db.execute(
+                select(Conversation).where(and_(
+                    Conversation.seller_id == seller_id,
+                    func.lower(Conversation.customer_name) == chat_name.lower(),
+                    Conversation.customer_phone.like("55%"),
+                    func.length(Conversation.customer_phone) <= 13,
+                )).order_by(Conversation.last_message_at.desc().nulls_last()).limit(1)
+            )
+            conv = result.scalar_one_or_none()
+            if conv:
+                # Store the mapping permanently
+                conv.lid_id = lid_id
+                _cache_lid(seller_id, lid_id, conv.customer_phone)
+                logger.info(f"Webhook: matched @lid {lid_id} to conv {conv.id} ({conv.customer_phone}) by chatName '{chat_name}'")
+                return conv
+
+    # 5. Check if there's an existing @lid-only conversation (customer_phone = lid_id)
+    if lid_id:
+        result = await db.execute(
+            select(Conversation).where(and_(
+                Conversation.seller_id == seller_id,
+                Conversation.customer_phone == lid_id,
+            ))
+        )
+        conv = result.scalar_one_or_none()
+        if conv:
+            # Upgrade with real phone if available
+            if normalized:
+                logger.info(f"Webhook: upgrading @lid conv {conv.id} phone {conv.customer_phone} -> {normalized}")
+                conv.customer_phone = normalized
+                conv.zapi_chat_id = normalized
+                conv.lid_id = lid_id
+                _cache_lid(seller_id, lid_id, normalized)
+            return conv
+
+    return None
 
 
 async def _process_webhook(seller_id: int, payload: dict):
@@ -29,15 +143,10 @@ async def _process_webhook(seller_id: int, payload: dict):
             from_me = payload.get("fromMe", False)
 
             # Extract customer phone.
-            # chatId formats from Z-API:
-            #   "5511999999999@c.us"      — real phone (preferred)
-            #   "5511999999999@s.whatsapp.net" — real phone
-            #   "123456789012345@lid"      — linked device ID (NOT a phone!)
             chat_id = payload.get("chatId", "")
-            lid_id = ""  # store @lid reference for fallback matching
+            lid_id = ""
 
             if chat_id and "@lid" in chat_id:
-                # Linked device ID — use the "phone" field instead
                 lid_id = chat_id.split("@")[0]
                 phone = payload.get("phone", "")
             elif chat_id:
@@ -48,20 +157,22 @@ async def _process_webhook(seller_id: int, payload: dict):
             # Safety check: if phone matches seller's own phone, skip
             normalized = normalize_phone(phone)
             seller_norm = normalize_phone(seller.phone or "")
-            if normalized == seller_norm:
-                logger.debug(f"Webhook: skipping message to/from seller's own number {normalized}")
+            if normalized and normalized == seller_norm:
                 return
 
             if not normalized and not lid_id:
-                logger.debug(f"Webhook: no valid phone or lid_id, skipping")
                 return
 
-            # Check exclusion (only if we have a real phone)
-            excl = await db.execute(
-                select(ExcludedNumber).where(ExcludedNumber.phone_normalized == normalized, ExcludedNumber.active == True)
-            )
-            if excl.scalar_one_or_none():
-                return
+            # Check exclusion
+            if normalized:
+                excl = await db.execute(
+                    select(ExcludedNumber).where(
+                        ExcludedNumber.phone_normalized == normalized,
+                        ExcludedNumber.active == True,
+                    )
+                )
+                if excl.scalar_one_or_none():
+                    return
 
             # Dedup by messageId
             message_id = payload.get("messageId") or payload.get("id")
@@ -70,60 +181,10 @@ async def _process_webhook(seller_id: int, payload: dict):
                 if exists.scalar_one_or_none():
                     return
 
-            # Upsert conversation — match by normalized phone OR by @lid ID
-            conv = None
-            if normalized:
-                conv_result = await db.execute(
-                    select(Conversation).where(and_(
-                        Conversation.seller_id == seller.id,
-                        Conversation.customer_phone == normalized,
-                    ))
-                )
-                conv = conv_result.scalar_one_or_none()
-
-            # If no match by phone and we have a @lid, try smarter matching
-            if not conv and lid_id:
-                # First check if there's already an @lid conversation
-                conv_result = await db.execute(
-                    select(Conversation).where(and_(
-                        Conversation.seller_id == seller.id,
-                        Conversation.customer_phone == lid_id,
-                    ))
-                )
-                lid_conv = conv_result.scalar_one_or_none()
-
-                # For outgoing messages (@lid + from_me), try to find the real
-                # phone conversation the seller is replying to.
-                # Z-API sends chatName with the customer name — use it to match.
-                if from_me:
-                    chat_name = (payload.get("chatName") or "").strip()
-                    if chat_name:
-                        name_result = await db.execute(
-                            select(Conversation).where(and_(
-                                Conversation.seller_id == seller.id,
-                                Conversation.customer_name == chat_name,
-                                Conversation.customer_phone.like("55%"),
-                            )).order_by(Conversation.last_message_at.desc().nulls_last()).limit(1)
-                        )
-                        real_by_name = name_result.scalar_one_or_none()
-                        if real_by_name:
-                            conv = real_by_name
-                            # If there's also an orphan @lid conv, upgrade it
-                            if lid_conv and normalized:
-                                lid_conv.customer_phone = normalized
-                                lid_conv.zapi_chat_id = normalized
-
-                if not conv:
-                    conv = lid_conv
-                    # If found by lid and we now have a real phone, update it
-                    if conv and normalized:
-                        logger.info(f"Webhook: upgrading @lid conv {conv.id} phone {conv.customer_phone} -> {normalized}")
-                        conv.customer_phone = normalized
-                        conv.zapi_chat_id = normalized
+            # Find or create conversation
+            conv = await _find_conversation(db, seller.id, normalized, lid_id, from_me, payload)
 
             if not conv:
-                # When seller sends first message (fromMe=true), senderName is the
-                # seller's name — NOT the customer's. Use chatName or phone instead.
                 if from_me:
                     cust_name = payload.get("chatName") or phone
                 else:
@@ -133,11 +194,14 @@ async def _process_webhook(seller_id: int, payload: dict):
                     customer_name=cust_name,
                     customer_phone=normalized or lid_id,
                     zapi_chat_id=normalized or lid_id,
+                    lid_id=lid_id or None,
                     is_group=False,
                     status="active",
                 )
                 db.add(conv)
                 await db.flush()
+                if lid_id and normalized:
+                    _cache_lid(seller.id, lid_id, normalized)
 
             # Parse timestamp
             moment = payload.get("moment") or payload.get("timestamp")
@@ -146,6 +210,7 @@ async def _process_webhook(seller_id: int, payload: dict):
             else:
                 ts = datetime.now(timezone.utc)
 
+            # Parse content
             content = ""
             text_data = payload.get("text")
             if isinstance(text_data, dict):
@@ -167,12 +232,10 @@ async def _process_webhook(seller_id: int, payload: dict):
             )
             db.add(msg)
 
-            # When customer sends a message, update customer_name if it was
-            # wrong (e.g. set to seller's name or just a phone number)
+            # When customer sends a message, update customer_name if it was wrong
             if not from_me:
                 real_name = payload.get("senderName") or payload.get("chatName")
                 if real_name and real_name != conv.customer_name:
-                    # Replace if current name is just a phone number or matches seller
                     current = conv.customer_name or ""
                     if current == conv.customer_phone or current == phone or current == seller.name:
                         conv.customer_name = real_name
@@ -184,7 +247,7 @@ async def _process_webhook(seller_id: int, payload: dict):
                 conv.started_at = ts
 
             await db.commit()
-            logger.info(f"Webhook processed: seller={seller_id}, phone={normalized}, from_me={from_me}")
+            logger.info(f"Webhook processed: seller={seller_id}, phone={normalized or lid_id}, from_me={from_me}, conv={conv.id}")
 
     except Exception as e:
         logger.error(f"Webhook processing error: {e}")

@@ -720,6 +720,10 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
             )).scalar()
             if ts:
                 real_match.last_message_at = ts
+            # Store lid_id for future @lid matching
+            lid_phone = lid_conv.customer_phone or ""
+            if not lid_phone.startswith("55") and lid_phone:
+                real_match.lid_id = lid_phone
             # Update customer name from real conv if @lid had a better name
             if lid_name and "@lid" not in lid_name and (
                 not real_match.customer_name

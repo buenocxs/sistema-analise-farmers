@@ -52,6 +52,7 @@ class Conversation(Base):
     customer_name = Column(String(255), nullable=True)
     customer_phone = Column(String(50), nullable=False)
     zapi_chat_id = Column(String(255), unique=True, nullable=True)
+    lid_id = Column(String(50), nullable=True, index=True)
     message_count = Column(Integer, default=0)
     started_at = Column(DateTime(timezone=True), nullable=True)
     last_message_at = Column(DateTime(timezone=True), nullable=True)
