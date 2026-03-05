@@ -17,6 +17,7 @@ _lid_cache: dict[tuple[int, str], str] = {}
 # Debug buffer: stores last N webhook payloads for diagnostics
 from collections import deque
 _debug_payloads: deque = deque(maxlen=50)
+_debug_errors: deque = deque(maxlen=20)
 
 
 def _cache_lid(seller_id: int, lid_id: str, phone: str):
@@ -224,7 +225,7 @@ async def _process_webhook(seller_id: int, payload: dict):
                     seller_id=seller.id,
                     customer_name=cust_name,
                     customer_phone=normalized or lid_id,
-                    zapi_chat_id=normalized or lid_id,
+                    zapi_chat_id=normalized or None,  # None for @lid-only (unique constraint)
                     lid_id=lid_id or None,
                     is_group=False,
                     status="active",
@@ -281,7 +282,13 @@ async def _process_webhook(seller_id: int, payload: dict):
             logger.info(f"Webhook processed: seller={seller_id}, phone={normalized or lid_id}, from_me={from_me}, conv={conv.id}")
 
     except Exception as e:
-        logger.error(f"Webhook processing error: {e}")
+        logger.error(f"Webhook processing error: {e}", exc_info=True)
+        _debug_errors.append({
+            "error": str(e),
+            "type": type(e).__name__,
+            "seller_id": seller_id,
+            "ts": datetime.now(timezone.utc).isoformat()[:19],
+        })
 
 
 @router.post("/zapi/{seller_id}")
@@ -314,9 +321,10 @@ async def zapi_webhook(seller_id: int, request: Request):
 
 @router.get("/debug/recent")
 async def debug_recent_payloads():
-    """Return last 50 webhook payloads for diagnostics."""
+    """Return last 50 webhook payloads and errors for diagnostics."""
     return {
         "count": len(_debug_payloads),
         "lid_cache_size": len(_lid_cache),
+        "errors": list(_debug_errors),
         "payloads": list(_debug_payloads),
     }
