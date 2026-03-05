@@ -523,3 +523,94 @@ async def merge_lid_duplicates(db: AsyncSession = Depends(get_db), _user=Depends
         "lid_total": len(lid_convs),
         "real_total": sum(len(v) for v in by_seller_real.values()),
     }
+
+
+@router.post("/redistribute-seller-messages")
+async def redistribute_seller_messages(db: AsyncSession = Depends(get_db), _user=Depends(get_current_user)):
+    """Redistribute misplaced seller messages to the correct conversations.
+
+    For each seller message (from_me=True), find the conversation that had
+    the most recent customer message (from_me=False) BEFORE that seller message.
+    If the seller message is in a different conversation, move it.
+
+    This fixes messages that were incorrectly merged by the time-overlap algorithm.
+    """
+    from sqlalchemy.orm import noload
+
+    # Get all sellers
+    sellers_result = await db.execute(select(Seller).where(Seller.is_active == True))
+    sellers = sellers_result.scalars().all()
+
+    total_moved = 0
+    total_checked = 0
+
+    for seller in sellers:
+        # Get ALL messages for this seller's conversations, sorted by timestamp
+        msgs_result = await db.execute(
+            select(Message.id, Message.conversation_id, Message.from_me, Message.timestamp)
+            .join(Conversation)
+            .where(Conversation.seller_id == seller.id)
+            .order_by(Message.timestamp)
+        )
+        all_msgs = msgs_result.all()
+
+        if not all_msgs:
+            continue
+
+        # Build a timeline: for each seller message, find which conversation
+        # had the most recent customer message before it
+        last_customer_msg_conv = None  # conv_id of most recent customer message
+
+        moves = []  # (message_id, current_conv_id, correct_conv_id)
+
+        for msg_id, conv_id, from_me, ts in all_msgs:
+            total_checked += 1
+            if not from_me:
+                # Customer message — update the "most recent customer conv"
+                last_customer_msg_conv = conv_id
+            else:
+                # Seller message — should be in the same conversation as the
+                # most recent customer message
+                if last_customer_msg_conv and conv_id != last_customer_msg_conv:
+                    moves.append((msg_id, conv_id, last_customer_msg_conv))
+
+        # Execute the moves
+        affected_convs = set()
+        for msg_id, old_conv_id, new_conv_id in moves:
+            await db.execute(
+                select(Message).where(Message.id == msg_id)  # ensure exists
+            )
+            from sqlalchemy import update as sa_update
+            await db.execute(
+                sa_update(Message)
+                .where(Message.id == msg_id)
+                .values(conversation_id=new_conv_id)
+            )
+            affected_convs.add(old_conv_id)
+            affected_convs.add(new_conv_id)
+            total_moved += 1
+
+        # Recalculate message_count and last_message_at for affected conversations
+        for conv_id in affected_convs:
+            msg_count = (await db.execute(
+                select(func.count(Message.id)).where(Message.conversation_id == conv_id)
+            )).scalar() or 0
+            last_ts = (await db.execute(
+                select(func.max(Message.timestamp)).where(Message.conversation_id == conv_id)
+            )).scalar()
+            await db.execute(
+                select(Conversation).where(Conversation.id == conv_id)
+            )
+            conv = (await db.execute(
+                select(Conversation).where(Conversation.id == conv_id)
+            )).scalar_one_or_none()
+            if conv:
+                conv.message_count = msg_count
+                if last_ts:
+                    conv.last_message_at = last_ts
+
+    await db.commit()
+    return {
+        "messages_moved": total_moved,
+        "messages_checked": total_checked,
+    }
