@@ -1,6 +1,6 @@
 import io
 import csv
-from datetime import date as date_type, timedelta
+from datetime import date as date_type, datetime, timedelta, timezone
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -103,13 +103,13 @@ async def list_conversations(
         q = q.where(Conversation.status == status)
         count_q = count_q.where(Conversation.status == status)
     if date_from:
-        q = q.where(Conversation.started_at >= date_from)
-        count_q = count_q.where(Conversation.started_at >= date_from)
+        dt_from = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+        q = q.where(Conversation.last_message_at >= dt_from)
+        count_q = count_q.where(Conversation.last_message_at >= dt_from)
     if date_to:
-        # Make date_to inclusive of the entire day (date string "2026-02-27" → include up to 23:59:59)
-        date_to_next = str(date_type.fromisoformat(date_to) + timedelta(days=1))
-        q = q.where(Conversation.started_at < date_to_next)
-        count_q = count_q.where(Conversation.started_at < date_to_next)
+        dt_to = (datetime.fromisoformat(date_to) + timedelta(days=1)).replace(tzinfo=timezone.utc)
+        q = q.where(Conversation.last_message_at < dt_to)
+        count_q = count_q.where(Conversation.last_message_at < dt_to)
 
     # Sentiment/stage filters require join with analysis
     if sentiment or stage:
@@ -157,10 +157,11 @@ async def export_conversations(
     if team:
         q = q.where(Seller.team == team)
     if date_from:
-        q = q.where(Conversation.started_at >= date_from)
+        dt_from = datetime.fromisoformat(date_from).replace(tzinfo=timezone.utc)
+        q = q.where(Conversation.last_message_at >= dt_from)
     if date_to:
-        date_to_next = str(date_type.fromisoformat(date_to) + timedelta(days=1))
-        q = q.where(Conversation.started_at < date_to_next)
+        dt_to = (datetime.fromisoformat(date_to) + timedelta(days=1)).replace(tzinfo=timezone.utc)
+        q = q.where(Conversation.last_message_at < dt_to)
 
     result = await db.execute(q)
     rows = result.all()
