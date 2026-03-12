@@ -11,7 +11,7 @@ import {
 import * as api from '../lib/api';
 import toast from 'react-hot-toast';
 import clsx from 'clsx';
-import { format, subDays, parseISO } from 'date-fns';
+import { format, subDays, parseISO, startOfWeek, endOfWeek, startOfMonth, addMonths, subMonths, getDay, getDaysInMonth } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { HelpTooltip } from '../components/Tooltip';
 import { EmptyState } from '../components/EmptyState';
@@ -39,15 +39,174 @@ const SEVERITY_STYLES = {
   critical: 'bg-red-100 text-red-800',
 };
 
-const PERIODS = [
-  { label: 'Hoje', value: '1d', days: 0 },
-  { label: 'Ontem', value: 'yesterday', days: null },
-  { label: 'Últimos 3 dias', value: '3d', days: 3 },
-  { label: 'Últimos 7 dias', value: '7d', days: 7 },
-  { label: 'Últimos 15 dias', value: '15d', days: 15 },
-  { label: 'Últimos 30 dias', value: '30d', days: 30 },
-  { label: 'Personalizado', value: 'custom', days: null },
-];
+// ---------------------------------------------------------------------------
+// DateRangePicker
+// ---------------------------------------------------------------------------
+
+function DateRangePicker({ dateFrom, dateTo, onChange }) {
+  const [open, setOpen] = useState(false);
+  const [viewDate, setViewDate] = useState(() => startOfMonth(new Date()));
+  const [selecting, setSelecting] = useState(null); // null | 'end'
+  const [hoverDate, setHoverDate] = useState(null);
+  const [tempFrom, setTempFrom] = useState(dateFrom);
+
+  const today = format(new Date(), 'yyyy-MM-dd');
+  const yesterday = format(subDays(new Date(), 1), 'yyyy-MM-dd');
+  const lastWeekStart = format(startOfWeek(subDays(new Date(), 7), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+  const lastWeekEnd = format(endOfWeek(subDays(new Date(), 7), { weekStartsOn: 1 }), 'yyyy-MM-dd');
+  const thisMonthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+
+  const PRESETS = [
+    { label: 'Hoje', from: today, to: today },
+    { label: 'Ontem', from: yesterday, to: yesterday },
+    { label: 'Últimos 3 dias', from: format(subDays(new Date(), 2), 'yyyy-MM-dd'), to: today },
+    { label: 'Últimos 7 dias', from: format(subDays(new Date(), 6), 'yyyy-MM-dd'), to: today },
+    { label: 'Semana passada', from: lastWeekStart, to: lastWeekEnd },
+    { label: 'Este mês', from: thisMonthStart, to: today },
+    { label: 'Últimos 30 dias', from: format(subDays(new Date(), 29), 'yyyy-MM-dd'), to: today },
+  ];
+
+  const daysInMonth = getDaysInMonth(viewDate);
+  const firstDayOfWeek = getDay(startOfMonth(viewDate));
+  const days = [];
+  for (let i = 0; i < firstDayOfWeek; i++) days.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    days.push(format(new Date(viewDate.getFullYear(), viewDate.getMonth(), d), 'yyyy-MM-dd'));
+  }
+
+  const effectiveTo = selecting === 'end' ? (hoverDate || dateTo) : dateTo;
+  const rangeFrom = selecting === 'end' ? tempFrom : dateFrom;
+
+  const isDayInRange = (d) => d && rangeFrom && effectiveTo && d > rangeFrom && d < effectiveTo;
+  const isDayStart = (d) => d === rangeFrom;
+  const isDayEnd = (d) => d === effectiveTo;
+  const isDaySingle = (d) => d === rangeFrom && rangeFrom === effectiveTo;
+
+  const handleDayClick = (d) => {
+    if (!d || d > today) return;
+    if (!selecting) {
+      setTempFrom(d);
+      setSelecting('end');
+    } else {
+      let from = tempFrom;
+      let to = d;
+      if (to < from) [from, to] = [to, from];
+      onChange(from, to);
+      setSelecting(null);
+      setHoverDate(null);
+      setOpen(false);
+    }
+  };
+
+  const handlePreset = ({ from, to }) => {
+    onChange(from, to);
+    setSelecting(null);
+    setHoverDate(null);
+    setOpen(false);
+  };
+
+  const getLabel = () => {
+    if (!dateFrom || !dateTo) return 'Selecionar período';
+    const preset = PRESETS.find((p) => p.from === dateFrom && p.to === dateTo);
+    if (preset) return preset.label;
+    if (dateFrom === dateTo) return format(parseISO(dateFrom), 'dd/MM/yyyy', { locale: ptBR });
+    return `${format(parseISO(dateFrom), 'dd/MM')} – ${format(parseISO(dateTo), 'dd/MM')}`;
+  };
+
+  return (
+    <div className="relative">
+      <button
+        onClick={() => { setOpen(!open); setSelecting(null); }}
+        className="btn-secondary flex items-center gap-2"
+      >
+        <Calendar className="w-4 h-4" />
+        {getLabel()}
+        <ChevronDown className="w-4 h-4" />
+      </button>
+
+      {open && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={() => { setOpen(false); setSelecting(null); }} />
+          <div className="absolute top-full mt-1 left-0 z-20 bg-white border border-gray-200 rounded-xl shadow-lg flex overflow-hidden">
+            {/* Presets */}
+            <div className="w-40 border-r border-gray-100 p-2 flex flex-col gap-0.5">
+              <p className="text-[10px] text-gray-400 uppercase tracking-wide font-semibold px-2 py-1">Atalhos</p>
+              {PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  onClick={() => handlePreset(preset)}
+                  className={clsx(
+                    'text-left px-3 py-1.5 rounded-lg text-sm transition-colors',
+                    preset.from === dateFrom && preset.to === dateTo
+                      ? 'bg-mave-50 text-mave-700 font-medium'
+                      : 'hover:bg-gray-50 text-gray-700'
+                  )}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Calendar */}
+            <div className="p-3 w-64">
+              <div className="flex items-center justify-between mb-3">
+                <button onClick={() => setViewDate(subMonths(viewDate, 1))} className="p-1 rounded hover:bg-gray-100 text-lg leading-none text-gray-600">‹</button>
+                <span className="text-sm font-semibold text-gray-800 capitalize">
+                  {format(viewDate, 'MMMM yyyy', { locale: ptBR })}
+                </span>
+                <button onClick={() => setViewDate(addMonths(viewDate, 1))} className="p-1 rounded hover:bg-gray-100 text-lg leading-none text-gray-600">›</button>
+              </div>
+
+              <div className="grid grid-cols-7 mb-1">
+                {['D','S','T','Q','Q','S','S'].map((d, i) => (
+                  <div key={i} className="text-center text-[10px] text-gray-400 font-semibold py-1">{d}</div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-7 gap-y-0.5">
+                {days.map((d, idx) => {
+                  if (!d) return <div key={`e-${idx}`} className="h-8" />;
+                  const inRange = isDayInRange(d);
+                  const isStart = isDayStart(d);
+                  const isEnd = isDayEnd(d);
+                  const isSingle = isDaySingle(d);
+                  const isToday = d === today;
+                  const isFuture = d > today;
+                  return (
+                    <button
+                      key={d}
+                      onClick={() => handleDayClick(d)}
+                      onMouseEnter={() => selecting === 'end' && setHoverDate(d)}
+                      onMouseLeave={() => selecting === 'end' && setHoverDate(null)}
+                      disabled={isFuture}
+                      className={clsx(
+                        'h-8 w-full text-xs flex items-center justify-center transition-all select-none',
+                        isFuture && 'opacity-30 cursor-not-allowed text-gray-400',
+                        !isFuture && !inRange && !isStart && !isEnd && 'hover:bg-gray-100 rounded-full text-gray-700',
+                        inRange && 'bg-mave-50 text-mave-800',
+                        (isStart || isEnd) && !isSingle && 'bg-mave-600 text-white font-semibold',
+                        isSingle && 'bg-mave-600 text-white font-semibold rounded-full',
+                        isStart && !isSingle && 'rounded-l-full',
+                        isEnd && !isSingle && 'rounded-r-full',
+                        isToday && !isStart && !isEnd && 'font-bold',
+                      )}
+                    >
+                      {parseInt(d.split('-')[2])}
+                    </button>
+                  );
+                })}
+              </div>
+
+              {selecting === 'end' && (
+                <p className="text-[11px] text-mave-500 text-center mt-2">Clique no dia final do período</p>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
 
 const DAYS_OF_WEEK = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
 const HOURS = Array.from({ length: 24 }, (_, i) => `${String(i).padStart(2, '0')}h`);
@@ -154,14 +313,8 @@ function formatResponseTime(seconds) {
 
 function Dashboard() {
   const navigate = useNavigate();
-  const [period, setPeriod] = useState(() => localStorage.getItem('mave_dashboard_period') || '7d');
-  const [dateFrom, setDateFrom] = useState(() => {
-    const saved = localStorage.getItem('mave_dashboard_period') || '7d';
-    const p = PERIODS.find(pp => pp.value === saved);
-    return format(subDays(new Date(), p?.days ?? 7), 'yyyy-MM-dd');
-  });
+  const [dateFrom, setDateFrom] = useState(format(subDays(new Date(), 6), 'yyyy-MM-dd'));
   const [dateTo, setDateTo] = useState(format(new Date(), 'yyyy-MM-dd'));
-  const [showPeriodDropdown, setShowPeriodDropdown] = useState(false);
 
   const [selectedTeam, setSelectedTeam] = useState('');
 
@@ -177,29 +330,10 @@ function Dashboard() {
   const [funnelData, setFunnelData] = useState([]);
 
   const getDateParams = useCallback(() => {
-    const params = {};
-    if (period === 'custom') {
-      params.date_from = dateFrom;
-      params.date_to = dateTo;
-    } else if (period === 'yesterday') {
-      const yesterday = format(subDays(new Date(), 1), 'yyyy-MM-dd');
-      params.date_from = yesterday;
-      params.date_to = yesterday;
-    } else if (period === '1d') {
-      const today = format(new Date(), 'yyyy-MM-dd');
-      params.date_from = today;
-      params.date_to = today;
-    } else {
-      const found = PERIODS.find((p) => p.value === period);
-      const days = found?.days || 7;
-      params.date_from = format(subDays(new Date(), days), 'yyyy-MM-dd');
-      params.date_to = format(new Date(), 'yyyy-MM-dd');
-    }
-    if (selectedTeam) {
-      params.team = selectedTeam;
-    }
+    const params = { date_from: dateFrom, date_to: dateTo };
+    if (selectedTeam) params.team = selectedTeam;
     return params;
-  }, [period, dateFrom, dateTo, selectedTeam]);
+  }, [dateFrom, dateTo, selectedTeam]);
 
   const fetchDashboardData = useCallback(async () => {
     setLoading(true);
@@ -313,25 +447,6 @@ function Dashboard() {
     }
   }, [loading, stats, sentimentDist.length]);
 
-  const handlePeriodChange = (value) => {
-    setPeriod(value);
-    if (value !== 'custom') localStorage.setItem('mave_dashboard_period', value);
-    setShowPeriodDropdown(false);
-    if (value === 'yesterday') {
-      const yesterday = format(subDays(new Date(), 1), 'yyyy-MM-dd');
-      setDateFrom(yesterday);
-      setDateTo(yesterday);
-    } else if (value === '1d') {
-      const today = format(new Date(), 'yyyy-MM-dd');
-      setDateFrom(today);
-      setDateTo(today);
-    } else if (value !== 'custom') {
-      const days = PERIODS.find((p) => p.value === value)?.days || 7;
-      setDateFrom(format(subDays(new Date(), days), 'yyyy-MM-dd'));
-      setDateTo(format(new Date(), 'yyyy-MM-dd'));
-    }
-  };
-
   const handleResolveAlert = async (alertId) => {
     try {
       await api.resolveAlert(alertId);
@@ -379,53 +494,11 @@ function Dashboard() {
 
       {/* Period selector */}
       <div className="flex flex-wrap items-center gap-3">
-        <div className="relative">
-          <button
-            onClick={() => setShowPeriodDropdown(!showPeriodDropdown)}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <Calendar className="w-4 h-4" />
-            {PERIODS.find((p) => p.value === period)?.label}
-            <ChevronDown className="w-4 h-4" />
-          </button>
-          {showPeriodDropdown && (
-            <>
-              <div className="fixed inset-0 z-10" onClick={() => setShowPeriodDropdown(false)} />
-              <div className="absolute top-full mt-1 left-0 w-52 bg-white border border-gray-200 rounded-lg shadow-lg z-20 py-1">
-                {PERIODS.map((p) => (
-                  <button
-                    key={p.value}
-                    onClick={() => handlePeriodChange(p.value)}
-                    className={clsx(
-                      'w-full text-left px-4 py-2 text-sm hover:bg-gray-50 transition-colors',
-                      period === p.value ? 'bg-mave-50 text-mave-700 font-medium' : 'text-gray-700'
-                    )}
-                  >
-                    {p.label}
-                  </button>
-                ))}
-              </div>
-            </>
-          )}
-        </div>
-
-        {period === 'custom' && (
-          <div className="flex items-center gap-2">
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={(e) => setDateFrom(e.target.value)}
-              className="input-field w-auto"
-            />
-            <span className="text-gray-400 text-sm">a</span>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={(e) => setDateTo(e.target.value)}
-              className="input-field w-auto"
-            />
-          </div>
-        )}
+        <DateRangePicker
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={(from, to) => { setDateFrom(from); setDateTo(to); }}
+        />
 
         <select
           value={selectedTeam}
