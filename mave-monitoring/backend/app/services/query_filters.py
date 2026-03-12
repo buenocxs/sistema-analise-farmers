@@ -17,8 +17,10 @@ def apply_conversation_exclusions(q, conv_model=Conversation):
     Filters out:
     1. Phone numbers in the exclusion list
     2. Invalid phones (@lid artifacts — not valid BR format 55 + 10-11 digits)
+    3. Conversations with no messages (created by sync but never received/sent any message)
     """
     q = q.where(conv_model.customer_phone.not_in(excluded_phones_subquery()))
     q = q.where(func.length(conv_model.customer_phone) <= 13)
     q = q.where(conv_model.customer_phone.like("55%"))
+    q = q.where(conv_model.message_count > 0)
     return q

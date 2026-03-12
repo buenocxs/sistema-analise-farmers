@@ -356,7 +356,20 @@ async def pull_messages_from_zapi(conversation_id: int, amount: int = Query(50, 
         else:
             content = raw.get("body", "")
 
-        if not content and not raw.get("type"):
+        raw_type = (raw.get("type") or "").lower()
+        if not content:
+            if raw_type in ("audio", "ptt"):
+                content = "[Áudio]"
+            elif raw_type == "image":
+                content = "[Imagem]"
+            elif raw_type == "document":
+                content = "[Documento]"
+            elif raw_type == "video":
+                content = "[Vídeo]"
+            elif raw_type == "sticker":
+                content = "[Figurinha]"
+
+        if not content and not raw_type:
             skipped += 1
             continue
 
@@ -460,7 +473,20 @@ async def bulk_pull_messages(seller_id: int, db: AsyncSession = Depends(get_db),
                 else:
                     content = raw.get("body", "")
 
-                if not content and not raw.get("type"):
+                raw_type = (raw.get("type") or "").lower()
+                if not content:
+                    if raw_type in ("audio", "ptt"):
+                        content = "[Áudio]"
+                    elif raw_type == "image":
+                        content = "[Imagem]"
+                    elif raw_type == "document":
+                        content = "[Documento]"
+                    elif raw_type == "video":
+                        content = "[Vídeo]"
+                    elif raw_type == "sticker":
+                        content = "[Figurinha]"
+
+                if not content and not raw_type:
                     total_skipped += 1
                     continue
 

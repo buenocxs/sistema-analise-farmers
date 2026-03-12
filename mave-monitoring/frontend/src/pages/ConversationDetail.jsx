@@ -123,8 +123,21 @@ function QualityBreakdown({ breakdown }) {
   );
 }
 
+function getMessageContent(message) {
+  const text = message.content || message.text || message.body || '';
+  if (text) return { text, isMedia: false };
+  const type = (message.message_type || '').toLowerCase();
+  if (type === 'audio' || type === 'ptt') return { text: '[Áudio]', isMedia: true };
+  if (type === 'image') return { text: '[Imagem]', isMedia: true };
+  if (type === 'document') return { text: '[Documento]', isMedia: true };
+  if (type === 'video') return { text: '[Vídeo]', isMedia: true };
+  if (type === 'sticker') return { text: '[Figurinha]', isMedia: true };
+  return { text: '', isMedia: false };
+}
+
 function MessageBubble({ message, isGroupStart }) {
   const isSeller = message.sender_type === 'seller';
+  const { text, isMedia } = getMessageContent(message);
 
   return (
     <div className={clsx('flex', isSeller ? 'justify-end' : 'justify-start')}>
@@ -141,8 +154,8 @@ function MessageBubble({ message, isGroupStart }) {
             {message.sender_name}
           </p>
         )}
-        <p className="text-sm whitespace-pre-wrap break-words leading-relaxed">
-          {message.content || message.text || message.body || ''}
+        <p className={clsx('text-sm whitespace-pre-wrap break-words leading-relaxed', isMedia && 'italic text-gray-500')}>
+          {text}
         </p>
         <p className={clsx('text-[10px] mt-1 text-right', isSeller ? 'text-mave-400' : 'text-gray-400')}>
           {message.timestamp

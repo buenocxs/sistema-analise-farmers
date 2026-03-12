@@ -258,6 +258,20 @@ async def _process_webhook(seller_id: int, payload: dict):
             else:
                 content = payload.get("body", "")
 
+            # For media messages with no text, store a readable placeholder
+            if not content:
+                _type = (msg_type or "").lower()
+                if _type in ("audio", "ptt"):
+                    content = "[Áudio]"
+                elif _type == "image":
+                    content = "[Imagem]"
+                elif _type == "document":
+                    content = "[Documento]"
+                elif _type == "video":
+                    content = "[Vídeo]"
+                elif _type == "sticker":
+                    content = "[Figurinha]"
+
             msg = Message(
                 conversation_id=conv.id,
                 zapi_message_id=message_id,
