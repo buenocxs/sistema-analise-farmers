@@ -10,6 +10,22 @@ from app.services.query_filters import apply_conversation_exclusions
 logger = logging.getLogger(__name__)
 
 
+def _filter_by_activity(q, date_from, date_to_exclusive):
+    """Filter conversations that had at least one message in the given period.
+
+    Replaces the old started_at filter so that conversations continuing from a
+    previous day are still counted when they receive messages in the period.
+    """
+    if not date_from and not date_to_exclusive:
+        return q
+    msg_subq = select(Message.id).where(Message.conversation_id == Conversation.id)
+    if date_from:
+        msg_subq = msg_subq.where(Message.timestamp >= date_from)
+    if date_to_exclusive:
+        msg_subq = msg_subq.where(Message.timestamp < date_to_exclusive)
+    return q.where(msg_subq.exists())
+
+
 async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, date_to: date | None = None, team: str | None = None) -> dict:
     """Compute dashboard statistics."""
     try:
@@ -23,15 +39,13 @@ async def get_dashboard_stats(db: AsyncSession, date_from: date | None = None, d
             seller_filter.append(Seller.team == team)
         seller_filter.append(Seller.is_active == True)
 
-        # Total conversations
+        # Total conversations — count conversations with activity (messages) in the period,
+        # not just conversations that started in the period.
         q = select(func.count(Conversation.id)).join(Seller)
         q = apply_conversation_exclusions(q)
         for f in seller_filter:
             q = q.where(f)
-        if date_from:
-            q = q.where(Conversation.started_at >= date_from)
-        if date_to_exclusive:
-            q = q.where(Conversation.started_at < date_to_exclusive)
+        q = _filter_by_activity(q, date_from, date_to_exclusive)
         total_convs = (await db.execute(q)).scalar() or 0
 
         # Total messages today
@@ -107,10 +121,7 @@ async def get_team_comparison(db: AsyncSession, date_from: date | None = None, d
             .where(and_(Seller.team == team_name, Seller.is_active == True))
         )
         q_convs = apply_conversation_exclusions(q_convs)
-        if date_from:
-            q_convs = q_convs.where(Conversation.started_at >= date_from)
-        if date_to_exclusive:
-            q_convs = q_convs.where(Conversation.started_at < date_to_exclusive)
+        q_convs = _filter_by_activity(q_convs, date_from, date_to_exclusive)
         total_convs = (await db.execute(q_convs)).scalar() or 0
 
         q_msgs = (
@@ -159,10 +170,7 @@ async def get_sentiment_distribution(db: AsyncSession, date_from: date | None = 
     q = apply_conversation_exclusions(q)
     if team:
         q = q.where(Seller.team == team)
-    if date_from:
-        q = q.where(Conversation.started_at >= date_from)
-    if date_to_exclusive:
-        q = q.where(Conversation.started_at < date_to_exclusive)
+    q = _filter_by_activity(q, date_from, date_to_exclusive)
     rows = (await db.execute(q)).all()
     result = {"positivo": 0, "neutro": 0, "negativo": 0, "frustrado": 0}
     for label, count in rows:
@@ -354,10 +362,7 @@ async def get_funnel_data(db: AsyncSession, date_from: date | None = None, date_
         q = q.where(Seller.team == team)
     if seller_id:
         q = q.where(Conversation.seller_id == seller_id)
-    if date_from:
-        q = q.where(Conversation.started_at >= date_from)
-    if date_to_exclusive:
-        q = q.where(Conversation.started_at < date_to_exclusive)
+    q = _filter_by_activity(q, date_from, date_to_exclusive)
 
     rows = (await db.execute(q)).all()
     stage_counts = {label: count for label, count in rows}
