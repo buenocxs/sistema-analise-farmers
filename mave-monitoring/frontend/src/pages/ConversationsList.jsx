@@ -10,6 +10,7 @@ import clsx from 'clsx';
 import { format, parseISO } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { EmptyState } from '../components/EmptyState';
+import { DateRangePicker } from '../components/DateRangePicker';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -289,19 +290,11 @@ function ConversationsList() {
           </select>
 
           {/* Date range */}
-          <input
-            type="date"
-            value={dateFrom}
-            onChange={(e) => { setDateFrom(e.target.value); setPage(0); }}
-            className="input-field"
-            title="Data início"
-          />
-          <input
-            type="date"
-            value={dateTo}
-            onChange={(e) => { setDateTo(e.target.value); setPage(0); }}
-            className="input-field"
-            title="Data fim"
+          <DateRangePicker
+            clearable
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            onChange={(from, to) => { setDateFrom(from); setDateTo(to); setPage(0); }}
           />
         </div>
       </div>
